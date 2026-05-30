@@ -42,14 +42,14 @@ spec:
             - /bin/bash
             - -c
             - |
-              # Initialize cluster
+              # Initialize cluster with reduced memory (dev single-node)
               couchbase-cli cluster-init \
                 -c couchbase.infra.svc.cluster.local:8091 \
                 --cluster-username $CB_USERNAME \
                 --cluster-password $CB_PASSWORD \
                 --services data,index,query \
-                --cluster-ramsize 2048 \
-                --cluster-index-ramsize 512 \
+                --cluster-ramsize 1024 \
+                --cluster-index-ramsize 256 \
                 --index-storage-setting default
               
               # Create buckets per §8.1
