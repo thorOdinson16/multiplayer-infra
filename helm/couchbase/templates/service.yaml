@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: couchbase
+  namespace: infra
+  labels:
+    app: couchbase
+spec:
+  type: {{ .Values.service.type }}
+  clusterIP: None
+  ports:
+    - name: admin
+      port: {{ .Values.service.adminPort }}
+      targetPort: {{ .Values.service.adminPort }}
+    - name: query
+      port: {{ .Values.service.queryPort }}
+      targetPort: {{ .Values.service.queryPort }}
+    - name: kv
+      port: {{ .Values.service.kvPort }}
+      targetPort: {{ .Values.service.kvPort }}
+  selector:
+    app: couchbase

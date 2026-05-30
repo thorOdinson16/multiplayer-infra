@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: infra
+  labels:
+    app: rabbitmq
+data:
+  10-defaults.conf: |
+    loopback_users.guest = false
+    management.tcp.port = 15672

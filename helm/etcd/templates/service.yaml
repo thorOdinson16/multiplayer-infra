@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: infra
+  labels:
+    app: etcd
+spec:
+  type: {{ .Values.service.type }}
+  clusterIP: None
+  ports:
+    - name: client
+      port: {{ .Values.service.clientPort }}
+      targetPort: {{ .Values.service.clientPort }}
+    - name: peer
+      port: {{ .Values.service.peerPort }}
+      targetPort: {{ .Values.service.peerPort }}
+  selector:
+    app: etcd

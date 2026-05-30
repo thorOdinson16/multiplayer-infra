@@ -1,0 +1,6 @@
+apiVersion: v2
+name: minio
+description: MinIO S3-compatible object storage for replay archives
+type: application
+version: 0.1.0
+appVersion: "2024-11-07"

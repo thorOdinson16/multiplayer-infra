@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+  namespace: infra
+  labels:
+    app: kafka
+data:
+  server.properties: |
+    # KRaft Mode
+    process.roles={{ .Values.config.processRoles }}
+    node.id={{ .Values.config.nodeId }}
+    controller.quorum.voters={{ .Values.config.controllerQuorumVoters }}
+    
+    # Listeners
+    listeners={{ .Values.config.listeners }}
+    advertised.listeners={{ .Values.config.advertisedListeners }}
+    listener.security.protocol.map={{ .Values.config.listenerSecurityProtocolMap }}
+    inter.broker.listener.name={{ .Values.config.interBrokerListenerName }}
+    controller.listener.names={{ .Values.config.controllerListenerNames }}
+    
+    # Log directories (mounted from PVC)
+    log.dirs=/var/lib/kafka/data
+    
+    # Cluster ID for KRaft
+    cluster.id={{ .Values.clusterId }}
+    
+    # Topic defaults
+    num.partitions={{ .Values.config.numPartitions }}
+    default.replication.factor={{ .Values.config.defaultReplicationFactor }}
+    offsets.topic.replication.factor={{ .Values.config.offsetsTopicReplicationFactor }}
+    transaction.state.log.replication.factor={{ .Values.config.transactionStateLogReplicationFactor }}
+    transaction.state.log.min.isr={{ .Values.config.transactionStateLogMinIsr }}
+    
+    # Log retention - 7 days per §8.2
+    log.retention.hours={{ .Values.config.logRetentionHours }}
+    log.segment.bytes={{ .Values.config.logSegmentBytes }}
+    log.retention.check.interval.ms={{ .Values.config.logRetentionCheckIntervalMs }}
+    
+    # Disable automatic topic creation - topics must be explicitly declared
+    auto.create.topics.enable=false

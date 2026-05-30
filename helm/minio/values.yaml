@@ -1,0 +1,27 @@
+replicaCount: 1
+
+image:
+  repository: quay.io/minio/minio
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+auth:
+  username: minioadmin
+  password: "minioadmin"
+
+persistence:
+  size: 50Gi
+  storageClass: "standard"
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "200m"
+  limits:
+    memory: "1Gi"
+    cpu: "1000m"
+
+service:
+  apiPort: 9000
+  consolePort: 9001
+  type: ClusterIP

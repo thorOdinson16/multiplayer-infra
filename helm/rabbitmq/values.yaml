@@ -1,0 +1,27 @@
+replicaCount: 1
+
+image:
+  repository: rabbitmq
+  tag: "3.13.7-management-alpine"
+  pullPolicy: IfNotPresent
+
+auth:
+  username: admin
+  password: "password"
+
+persistence:
+  size: 10Gi
+  storageClass: "standard"
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "200m"
+  limits:
+    memory: "1Gi"
+    cpu: "1000m"
+
+service:
+  amqpPort: 5672
+  managementPort: 15672
+  type: ClusterIP

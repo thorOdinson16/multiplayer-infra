@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: monitoring
+  labels:
+    app: jaeger
+spec:
+  ports:
+    - name: collector
+      port: {{ .Values.jaeger.service.collectorPort }}
+    - name: query
+      port: {{ .Values.jaeger.service.queryPort }}
+  selector:
+    app: jaeger
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: monitoring
+  labels:
+    app: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+    spec:
+      containers:
+        - name: jaeger
+          image: "{{ .Values.jaeger.image.repository }}:{{ .Values.jaeger.image.tag }}"
+          args:
+            - --collector.otlp.enabled=true
+          ports:
+            - containerPort: {{ .Values.jaeger.service.collectorPort }}
+            - containerPort: {{ .Values.jaeger.service.queryPort }}
+          resources:
+            {{- toYaml .Values.jaeger.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.jaeger.service.queryPort }}
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.jaeger.service.queryPort }}
+            initialDelaySeconds: 5

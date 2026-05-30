@@ -1,0 +1,23 @@
+replicaCount: 1
+
+image:
+  repository: quay.io/coreos/etcd
+  tag: "v3.5.17"
+  pullPolicy: IfNotPresent
+
+persistence:
+  size: 2Gi
+  storageClass: "standard"
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+service:
+  clientPort: 2379
+  peerPort: 2380
+  type: ClusterIP

@@ -1,0 +1,57 @@
+# Kafka KRaft - Single Node Development Configuration
+
+replicaCount: 1
+
+image:
+  repository: apache/kafka
+  tag: "3.9.0"
+  pullPolicy: IfNotPresent
+
+# KRaft cluster ID - generated once, persisted in ConfigMap
+# Change this only when recreating the cluster from scratch
+clusterId: "a7f3b9c2-d1e4-4f8a-9b6c-0d5e2a1f8c3d"
+
+# Storage per §9.3
+persistence:
+  size: 30Gi
+  storageClass: "standard"
+
+# Kafka listeners
+service:
+  internalPort: 9092
+  controllerPort: 9093
+  type: ClusterIP
+
+# Resource limits (single-node dev)
+resources:
+  requests:
+    memory: "2Gi"
+    cpu: "1000m"
+  limits:
+    memory: "4Gi"
+    cpu: "2000m"
+
+# Broker configuration
+config:
+  # KRaft combined mode: single node acts as both controller and broker
+  processRoles: "controller,broker"
+  # Node ID for the single replica
+  nodeId: 0
+  # Controller quorum voters - only this node
+  controllerQuorumVoters: "0@kafka-0.kafka.infra.svc.cluster.local:9093"
+  # Listeners
+  listeners: "PLAINTEXT://:9092,CONTROLLER://:9093"
+  advertisedListeners: "PLAINTEXT://kafka-0.kafka.infra.svc.cluster.local:9092"
+  listenerSecurityProtocolMap: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+  interBrokerListenerName: "PLAINTEXT"
+  controllerListenerNames: "CONTROLLER"
+  # Topic defaults
+  numPartitions: 3
+  defaultReplicationFactor: 1
+  offsetsTopicReplicationFactor: 1
+  transactionStateLogReplicationFactor: 1
+  transactionStateLogMinIsr: 1
+  # Log retention
+  logRetentionHours: 168  # 7 days per §8.2
+  logSegmentBytes: "1073741824"
+  logRetentionCheckIntervalMs: 300000

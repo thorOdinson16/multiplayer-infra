@@ -1,0 +1,41 @@
+replicaCount: 1
+
+image:
+  repository: couchbase/server
+  tag: "community-7.6.0"
+  pullPolicy: IfNotPresent
+
+auth:
+  username: admin
+
+persistence:
+  size: 20Gi
+  storageClass: "standard"
+
+resources:
+  requests:
+    memory: "1.5Gi"
+    cpu: "500m"
+  limits:
+    memory: "3Gi"
+    cpu: "1500m"
+
+service:
+  adminPort: 8091
+  queryPort: 8093
+  kvPort: 11210
+  type: ClusterIP
+
+buckets:
+  - name: players
+    type: couchbase
+    ramQuotaMB: 256
+  - name: sessions
+    type: ephemeral
+    ramQuotaMB: 512
+  - name: matches
+    type: couchbase
+    ramQuotaMB: 256
+  - name: replays
+    type: couchbase
+    ramQuotaMB: 128

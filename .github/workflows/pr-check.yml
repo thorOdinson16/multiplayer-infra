@@ -1,0 +1,16 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify docs exist
+        run: |
+          test -s docs/REQUIREMENTS.md && echo "SRS present"
+          test -s docs/architecture.md && echo "Architecture docs present"
+          test -s docs/adr/ADR-01-raft.md && echo "ADRs present"

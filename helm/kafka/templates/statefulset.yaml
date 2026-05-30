@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: infra
+  labels:
+    app: kafka
+spec:
+  serviceName: kafka
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      initContainers:
+        - name: format-log-dirs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              if [ ! -f /var/lib/kafka/data/meta.properties ]; then
+                echo "Formatting KRaft log directories with cluster ID: {{ .Values.clusterId }}"
+                /opt/kafka/bin/kafka-storage.sh format \
+                  --cluster-id {{ .Values.clusterId }} \
+                  --config /etc/kafka-config/server.properties \
+                  --ignore-formatted
+              else
+                echo "Log directories already formatted. Skipping."
+              fi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kafka-config
+            - name: data
+              mountPath: /var/lib/kafka/data
+
+      containers:
+        - name: kafka
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              /opt/kafka/bin/kafka-server-start.sh /etc/kafka-config/server.properties
+          ports:
+            - name: internal
+              containerPort: {{ .Values.service.internalPort }}
+              protocol: TCP
+            - name: controller
+              containerPort: {{ .Values.service.controllerPort }}
+              protocol: TCP
+          env:
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xms1G -Xmx2G"
+            - name: KAFKA_JVM_PERFORMANCE_OPTS
+              value: "-server -XX:+UseG1GC -XX:MaxGCPauseMillis=20 -XX:InitiatingHeapOccupancyPercent=35 -XX:+DisableExplicitGC"
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/kafka-config
+            - name: data
+              mountPath: /var/lib/kafka/data
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 &>/dev/null
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 &>/dev/null
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+      volumes:
+        - name: config
+          configMap:
+            name: kafka-config
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app: kafka
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        storageClassName: {{ .Values.persistence.storageClass }}
