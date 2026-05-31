@@ -1,10 +1,9 @@
+# Remove the overly broad patterns and replace with specific ones
+cat > .gitignore << 'EOF'
 # Build binaries
 *.out
-auth-service
-matchmaking-service
-services/auth-service/auth-service
-services/matchmaking-service/matchmaking-service
-game-room-server
-services/game-room-server/game-room-server
-reconnect-handler
-services/reconnect-handler/reconnect-handler
+/services/auth-service/auth-service
+/services/matchmaking-service/matchmaking-service
+/services/game-room-server/game-room-server
+/services/reconnect-handler/reconnect-handler
+EOF

@@ -1,0 +1,22 @@
+replicaCount: 1
+
+image:
+  repository: reconnect-handler
+  tag: "latest"
+  pullPolicy: Never
+
+redis:
+  addr: "redis.infra.svc.cluster.local:6379"
+  password: ""
+
+resources:
+  requests:
+    memory: "32Mi"
+    cpu: "25m"
+  limits:
+    memory: "64Mi"
+    cpu: "100m"
+
+service:
+  port: 8080
+  type: ClusterIP
