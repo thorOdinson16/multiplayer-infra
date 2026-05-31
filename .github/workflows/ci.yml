@@ -48,6 +48,11 @@ jobs:
           cd services/reconnect-handler
           go mod tidy
           go build -o /dev/null ./cmd/main.go
+      - name: Build Replay Service
+        run: |
+          cd services/replay-service
+          go mod tidy
+          go build -o /dev/null ./cmd/main.go
 
   docker-lint:
     runs-on: ubuntu-latest
@@ -59,3 +64,4 @@ jobs:
           test -f services/matchmaking-service/Dockerfile && echo "Matchmaking Dockerfile OK"
           test -f services/game-room-server/Dockerfile && echo "Game Room Dockerfile OK"
           test -f services/reconnect-handler/Dockerfile && echo "Reconnect Dockerfile OK"
+          test -f services/replay-service/Dockerfile && echo "Replay Dockerfile OK"
