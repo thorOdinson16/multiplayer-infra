@@ -1,0 +1,46 @@
+replicaCount: 3
+
+image:
+  repository: game-room-server
+  tag: "latest"
+  pullPolicy: Never
+
+raft:
+  dataDir: /var/lib/raft
+  bootstrap: true
+
+kafka:
+  brokers: "kafka.infra.svc.cluster.local:9092"
+
+redis:
+  addr: "redis.infra.svc.cluster.local:6379"
+
+couchbase:
+  host: "couchbase.infra.svc.cluster.local"
+  user: admin
+  password: "password"
+
+maxPlayers: 8
+tickRate: 20
+
+resources:
+  requests:
+    memory: "128Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+service:
+  httpPort: 8080
+  raftPort: 7000
+
+persistence:
+  size: 5Gi
+  storageClass: "standard"
+
+hpa:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: game-room-server
+description: Game Room Server with Raft consensus for multiplayer-infra
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
