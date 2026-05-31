@@ -1,0 +1,31 @@
+replicaCount: 1
+
+image:
+  repository: replay-service
+  tag: "latest"
+  pullPolicy: Never
+
+kafka:
+  brokers: "kafka.infra.svc.cluster.local:9092"
+
+couchbase:
+  host: "couchbase.infra.svc.cluster.local"
+  user: admin
+  password: "password"
+
+minio:
+  endpoint: "minio.infra.svc.cluster.local:9000"
+  user: minioadmin
+  password: "minioadmin"
+
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "50m"
+  limits:
+    memory: "128Mi"
+    cpu: "200m"
+
+service:
+  port: 8080
+  type: ClusterIP

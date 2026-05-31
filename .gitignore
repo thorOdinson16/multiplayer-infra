@@ -6,4 +6,4 @@ cat > .gitignore << 'EOF'
 /services/matchmaking-service/matchmaking-service
 /services/game-room-server/game-room-server
 /services/reconnect-handler/reconnect-handler
-EOF
+EOF/services/replay-service/replay-service

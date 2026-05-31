@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: replay-service
+  namespace: game-platform
+  labels:
+    app: replay-service
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.port }}
+  selector:
+    app: replay-service
