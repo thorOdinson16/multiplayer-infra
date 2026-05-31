@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: matchmaking-service-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: matchmaking-service
+data:
+  RABBITMQ_URL: {{ .Values.rabbitmq.url }}
+  ETCD_ENDPOINT: {{ .Values.etcd.endpoint }}
+  NAMESPACE: {{ .Values.namespace }}

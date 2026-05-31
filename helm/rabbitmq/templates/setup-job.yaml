@@ -42,6 +42,18 @@ spec:
             - /bin/sh
             - -c
             - |
+              set -e
+              
+              # Wait for management API to actually be ready (not just port open)
+              for i in $(seq 1 30); do
+                if rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS list queues > /dev/null 2>&1; then
+                  echo "RabbitMQ management API is ready"
+                  break
+                fi
+                echo "Waiting for management API... attempt $i"
+                sleep 2
+              done
+              
               # Create deadletter exchange (fanout)
               rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare exchange \
                 name=deadletter.exchange type=fanout durable=true
