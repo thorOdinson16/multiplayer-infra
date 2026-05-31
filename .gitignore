@@ -1,0 +1,6 @@
+# Build binaries
+*.out
+auth-service
+matchmaking-service
+services/auth-service/auth-service
+services/matchmaking-service/matchmaking-service
