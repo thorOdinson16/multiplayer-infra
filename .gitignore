@@ -1,9 +1,7 @@
-# Remove the overly broad patterns and replace with specific ones
-cat > .gitignore << 'EOF'
 # Build binaries
 *.out
 /services/auth-service/auth-service
 /services/matchmaking-service/matchmaking-service
 /services/game-room-server/game-room-server
 /services/reconnect-handler/reconnect-handler
-EOF/services/replay-service/replay-service
+/services/replay-service/replay-service
