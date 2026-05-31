@@ -38,6 +38,11 @@ jobs:
           cd services/matchmaking-service
           go mod tidy
           go build -o /dev/null ./cmd/main.go
+      - name: Build Game Room Server
+        run: |
+          cd services/game-room-server
+          go mod tidy
+          go build -o /dev/null ./cmd/main.go
 
   docker-lint:
     runs-on: ubuntu-latest
@@ -47,3 +52,4 @@ jobs:
         run: |
           test -f services/auth-service/Dockerfile && echo "Auth Dockerfile OK"
           test -f services/matchmaking-service/Dockerfile && echo "Matchmaking Dockerfile OK"
+          test -f services/game-room-server/Dockerfile && echo "Game Room Dockerfile OK"
