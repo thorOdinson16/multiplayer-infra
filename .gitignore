@@ -6,3 +6,5 @@ services/auth-service/auth-service
 services/matchmaking-service/matchmaking-service
 game-room-server
 services/game-room-server/game-room-server
+reconnect-handler
+services/reconnect-handler/reconnect-handler
