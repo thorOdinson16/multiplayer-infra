@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: game-room-server
+  namespace: game-platform
+  labels:
+    app: game-room-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.service.httpPort }}
+  selector:
+    app: game-room-server

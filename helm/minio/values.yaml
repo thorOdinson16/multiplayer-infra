@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: quay.io/minio/minio
-  tag: "latest"
+  repository: minio/minio
+  tag: "RELEASE.2024-11-07T00-52-37Z"
   pullPolicy: IfNotPresent
 
 auth:

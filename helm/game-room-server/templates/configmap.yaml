@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: game-room-server-config
+  namespace: game-platform
+  labels:
+    app: game-room-server
+data:
+  KAFKA_BROKERS: {{ .Values.kafka.brokers }}
+  REDIS_ADDR: {{ .Values.redis.addr }}
+  COUCHBASE_HOST: {{ .Values.couchbase.host }}
+  COUCHBASE_USER: {{ .Values.couchbase.user }}
+  MAX_PLAYERS: {{ .Values.maxPlayers | quote }}
+  TICK_RATE: {{ .Values.tickRate | quote }}
