@@ -53,6 +53,21 @@ jobs:
           cd services/replay-service
           go mod tidy
           go build -o /dev/null ./cmd/main.go
+      - name: Build Leaderboard Service
+        run: |
+          cd services/leaderboard-service
+          go mod tidy
+          go build -o /dev/null ./cmd/main.go
+      - name: Build Analytics Service
+        run: |
+          cd services/analytics-service
+          go mod tidy
+          go build -o /dev/null ./cmd/main.go
+      - name: Build Notification Service
+        run: |
+          cd services/notification-service
+          go mod tidy
+          go build -o /dev/null ./cmd/main.go
 
   docker-lint:
     runs-on: ubuntu-latest
@@ -65,3 +80,6 @@ jobs:
           test -f services/game-room-server/Dockerfile && echo "Game Room Dockerfile OK"
           test -f services/reconnect-handler/Dockerfile && echo "Reconnect Dockerfile OK"
           test -f services/replay-service/Dockerfile && echo "Replay Dockerfile OK"
+          test -f services/leaderboard-service/Dockerfile && echo "Leaderboard Dockerfile OK"
+          test -f services/analytics-service/Dockerfile && echo "Analytics Dockerfile OK"
+          test -f services/notification-service/Dockerfile && echo "Notification Dockerfile OK"
