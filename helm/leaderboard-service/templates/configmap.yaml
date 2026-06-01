@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: leaderboard-service-config
+  namespace: game-platform
+data:
+  COUCHBASE_HOST: {{ .Values.couchbase.host }}
+  COUCHBASE_USER: {{ .Values.couchbase.user }}
+  KAFKA_BROKERS: {{ .Values.kafka.brokers }}

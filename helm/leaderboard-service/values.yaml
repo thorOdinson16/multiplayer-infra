@@ -1,0 +1,21 @@
+replicaCount: 1
+image:
+  repository: leaderboard-service
+  tag: "latest"
+  pullPolicy: Never
+couchbase:
+  host: couchbase.infra.svc.cluster.local
+  user: admin
+  password: "password"
+kafka:
+  brokers: kafka.infra.svc.cluster.local:9092
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "50m"
+  limits:
+    memory: "128Mi"
+    cpu: "200m"
+service:
+  port: 8080
+  type: ClusterIP

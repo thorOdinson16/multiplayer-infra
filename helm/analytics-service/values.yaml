@@ -1,0 +1,17 @@
+replicaCount: 1
+image:
+  repository: analytics-service
+  tag: "latest"
+  pullPolicy: Never
+kafka:
+  brokers: kafka.infra.svc.cluster.local:9092
+resources:
+  requests:
+    memory: "32Mi"
+    cpu: "25m"
+  limits:
+    memory: "64Mi"
+    cpu: "100m"
+service:
+  port: 8080
+  type: ClusterIP

@@ -1,0 +1,17 @@
+replicaCount: 1
+image:
+  repository: notification-service
+  tag: "latest"
+  pullPolicy: Never
+rabbitmq:
+  url: "amqp://admin:password@rabbitmq.infra.svc.cluster.local:5672/"
+resources:
+  requests:
+    memory: "32Mi"
+    cpu: "25m"
+  limits:
+    memory: "64Mi"
+    cpu: "100m"
+service:
+  port: 8080
+  type: ClusterIP

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analytics-service-config
+  namespace: game-platform
+data:
+  KAFKA_BROKERS: {{ .Values.kafka.brokers }}
