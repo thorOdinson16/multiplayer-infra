@@ -1,5 +1,9 @@
 {
+  "scripts": {
+    "dev:client": "node scripts/dev-proxy.js"
+  },
   "dependencies": {
+    "http-proxy": "^1.18.1",
     "repomix": "^1.14.0"
   }
 }

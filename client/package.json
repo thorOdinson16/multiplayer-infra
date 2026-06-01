@@ -1,0 +1,8 @@
+{
+  "name": "multiplayer-infra-client",
+  "version": "0.1.0",
+  "description": "Web client for multiplayer-infra",
+  "scripts": {
+    "start": "npx serve public -l 3000"
+  }
+}

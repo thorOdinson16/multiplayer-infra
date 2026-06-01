@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,7 +27,6 @@ func main() {
 	nodeID := getEnv("NODE_ID", "game-room-0")
 	bindAddr := getEnv("RAFT_BIND", "0.0.0.0:7000")
 	dataDir := getEnv("RAFT_DATA_DIR", "/var/lib/raft")
-	bootstrap := getEnvBool("RAFT_BOOTSTRAP", true)
 	kafkaBrokers := getEnv("KAFKA_BROKERS", "kafka.infra.svc.cluster.local:9092")
 	redisAddr := getEnv("REDIS_ADDR", "redis.infra.svc.cluster.local:6379")
 	maxPlayers := getEnvInt("MAX_PLAYERS", 8)
@@ -37,11 +37,22 @@ func main() {
 	gameState := game.NewGameState(matchID, maxPlayers)
 
 	// Initialize Raft
+	raftService := getEnv("RAFT_SERVICE", "game-room-server-headless")
+	raftNamespace := getEnv("RAFT_NAMESPACE", "game-platform")
+	
+	// Determine if this pod should bootstrap (only pod-0)
+	podName := getEnv("POD_NAME", nodeID)
+	isPodZero := strings.HasSuffix(podName, "-0")
+	
+	log.Printf("Raft configuration: nodeID=%s, isPodZero=%v, podName=%s", nodeID, isPodZero, podName)
+	
 	raftNode, err := raft.NewRaftNode(raft.Config{
 		NodeID:    nodeID,
 		BindAddr:  bindAddr,
 		DataDir:   dataDir,
-		Bootstrap: bootstrap,
+		Bootstrap: isPodZero,  // Only pod-0 bootstraps
+		Service:   raftService,
+		Namespace: raftNamespace,
 	}, gameState)
 	if err != nil {
 		log.Fatalf("Failed to start Raft: %v", err)
@@ -61,7 +72,9 @@ func main() {
 
 	// Publish match start
 	ctx := context.Background()
-	kafkaPub.PublishMatchStart(ctx, matchID)
+	if err := kafkaPub.PublishMatchStart(ctx, matchID); err != nil {
+		log.Printf("Warning: Failed to publish match start event: %v", err)
+	}
 	gameState.SetStatus("running")
 
 	// Initialize spectator ring buffer
@@ -73,13 +86,17 @@ func main() {
 	// Initialize broadcaster
 	broadcaster := game.NewBroadcaster()
 
-	// WebSocket handler
+	// WebSocket handler - PASS THE BROADCASTER
 	wsHandler := ws.NewHandler(gameState, func(event *game.InputEvent) {
 		// Process input through Raft if leader
 		if raftNode.IsLeader() {
-			raftNode.ApplyInput(event)
+			if err := raftNode.ApplyInput(event); err != nil {
+				log.Printf("Failed to apply input to Raft: %v", err)
+			}
+		} else {
+			log.Printf("Ignoring input - not leader (current leader: %s)", raftNode.LeaderAddress())
 		}
-	})
+	}, broadcaster)
 
 	// Tick loop with broadcast and Kafka publish
 	tickLoop := game.NewTickLoop(gameState, tickRate, func(tick uint64, state *game.GameState) {
@@ -91,12 +108,16 @@ func main() {
 
 		// Publish to Kafka every 5 ticks to reduce load
 		if tick%5 == 0 {
-			kafkaPub.PublishTickEvent(ctx, matchID, tick, state)
+			if err := kafkaPub.PublishTickEvent(ctx, matchID, tick, state); err != nil {
+				log.Printf("Failed to publish tick event: %v", err)
+			}
 		}
 
 		// Save state to Redis every 10 ticks
 		if tick%10 == 0 && redisStore != nil {
-			redisStore.SaveState(ctx, matchID, state, 10*time.Minute)
+			if err := redisStore.SaveState(ctx, matchID, state, 10*time.Minute); err != nil {
+				log.Printf("Failed to save state to Redis: %v", err)
+			}
 		}
 	})
 	tickLoop.Start()
@@ -113,6 +134,18 @@ func main() {
 		}
 		wsHandler.HandleConnection(w, r, playerID, username)
 	})
+	
+	// Add spectator endpoint
+	mux.HandleFunc("/spectate/", func(w http.ResponseWriter, r *http.Request) {
+		spectatorID := r.URL.Query().Get("spectatorId")
+		matchIDParam := r.URL.Query().Get("matchId")
+		if spectatorID == "" || matchIDParam == "" {
+			http.Error(w, "spectatorId and matchId required", http.StatusBadRequest)
+			return
+		}
+		wsHandler.AddSpectator(w, r, spectatorID, matchIDParam)
+	})
+	
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -126,6 +159,16 @@ func main() {
 			w.Write([]byte("FOLLOWER"))
 		}
 	})
+	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"matchId": "` + matchID + `",
+			"nodeId": "` + nodeID + `",
+			"isLeader": ` + strconv.FormatBool(raftNode.IsLeader()) + `,
+			"playerCount": ` + strconv.Itoa(broadcaster.PlayerCount()) + `,
+			"tickRate": ` + strconv.Itoa(tickRate) + `
+		}`))
+	})
 
 	server := &http.Server{
 		Addr:    ":" + serverPort,
@@ -134,6 +177,7 @@ func main() {
 
 	go func() {
 		log.Printf("Game Room Server starting on port %s (match: %s)", serverPort, matchID)
+		log.Printf("Node ID: %s, Leader: %v", nodeID, raftNode.IsLeader())
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
@@ -146,8 +190,11 @@ func main() {
 
 	log.Println("Shutting down Game Room Server...")
 	stopSpectator <- struct{}{}
-	kafkaPub.PublishMatchEnd(ctx, matchID)
+	if err := kafkaPub.PublishMatchEnd(ctx, matchID); err != nil {
+		log.Printf("Warning: Failed to publish match end event: %v", err)
+	}
 	gameState.SetStatus("finished")
+	broadcaster.CloseAll()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

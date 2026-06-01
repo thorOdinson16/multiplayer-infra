@@ -37,5 +37,5 @@ data:
     log.segment.bytes={{ .Values.config.logSegmentBytes }}
     log.retention.check.interval.ms={{ .Values.config.logRetentionCheckIntervalMs }}
     
-    # Disable automatic topic creation - topics must be explicitly declared
-    auto.create.topics.enable=false
+    # Enable automatic topic creation as fallback
+    auto.create.topics.enable=true

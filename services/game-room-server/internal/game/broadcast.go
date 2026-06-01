@@ -28,6 +28,7 @@ func (b *Broadcaster) AddConnection(playerID string, conn *websocket.Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.connections[playerID] = conn
+	log.Printf("Broadcaster: added player %s (total players: %d)", playerID, len(b.connections))
 }
 
 // RemoveConnection removes a player connection
@@ -37,6 +38,7 @@ func (b *Broadcaster) RemoveConnection(playerID string) {
 	if conn, ok := b.connections[playerID]; ok {
 		conn.Close()
 		delete(b.connections, playerID)
+		log.Printf("Broadcaster: removed player %s (remaining: %d)", playerID, len(b.connections))
 	}
 }
 
@@ -45,6 +47,7 @@ func (b *Broadcaster) AddSpectator(spectatorID string, conn *websocket.Conn) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spectators[spectatorID] = conn
+	log.Printf("Broadcaster: added spectator %s (total spectators: %d)", spectatorID, len(b.spectators))
 }
 
 // RemoveSpectator removes a spectator connection
@@ -72,6 +75,25 @@ func (b *Broadcaster) BroadcastToPlayers(state *GameState) {
 	for playerID, conn := range b.connections {
 		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 			log.Printf("Failed to send to player %s: %v", playerID, err)
+		}
+	}
+}
+
+// BroadcastToSpectators sends the state snapshot to all connected spectators
+func (b *Broadcaster) BroadcastToSpectators(state *GameState) {
+	snapshot := state.GetSnapshot()
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		log.Printf("Failed to marshal state: %v", err)
+		return
+	}
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for spectatorID, conn := range b.spectators {
+		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+			log.Printf("Failed to send to spectator %s: %v", spectatorID, err)
 		}
 	}
 }

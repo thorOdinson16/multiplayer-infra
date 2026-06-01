@@ -18,22 +18,21 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// Handler manages WebSocket connections for a game room
 type Handler struct {
-	mu       sync.RWMutex
-	game     *game.GameState
-	onInput  func(event *game.InputEvent)
+	mu          sync.RWMutex
+	game        *game.GameState
+	onInput     func(event *game.InputEvent)
+	broadcaster *game.Broadcaster
 }
 
-// NewHandler creates a new WebSocket handler
-func NewHandler(gs *game.GameState, onInput func(event *game.InputEvent)) *Handler {
+func NewHandler(gs *game.GameState, onInput func(event *game.InputEvent), broadcaster *game.Broadcaster) *Handler {
 	return &Handler{
-		game:    gs,
-		onInput: onInput,
+		game:        gs,
+		onInput:     onInput,
+		broadcaster: broadcaster,
 	}
 }
 
-// HandleConnection handles a new WebSocket connection
 func (h *Handler) HandleConnection(w http.ResponseWriter, r *http.Request, playerID, username string) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -41,19 +40,39 @@ func (h *Handler) HandleConnection(w http.ResponseWriter, r *http.Request, playe
 		return
 	}
 
+	// Register connection with broadcaster for state updates
+	if h.broadcaster != nil {
+		h.broadcaster.AddConnection(playerID, conn)
+		log.Printf("Player %s registered with broadcaster", playerID)
+	}
+
 	h.mu.Lock()
 	h.game.AddPlayer(playerID, username)
 	h.mu.Unlock()
 
-	log.Printf("Player %s (%s) connected", username, playerID)
+	// CRITICAL FIX: Send initial state immediately to prevent client timeout
+	initialState := h.game.GetSnapshot()
+	initialData, err := json.Marshal(initialState)
+	if err != nil {
+		log.Printf("Failed to marshal initial state: %v", err)
+	} else {
+		if err := conn.WriteMessage(websocket.TextMessage, initialData); err != nil {
+			log.Printf("Failed to send initial state to player %s: %v", playerID, err)
+		} else {
+			log.Printf("Sent initial state to player %s (tick: %d, players: %d)", playerID, initialState.Tick, len(initialState.Players))
+		}
+	}
 
-	// Read messages from the client
+	log.Printf("Player %s (%s) connected", username, playerID)
 	go h.readLoop(conn, playerID)
 }
 
 func (h *Handler) readLoop(conn *websocket.Conn, playerID string) {
 	defer func() {
 		conn.Close()
+		if h.broadcaster != nil {
+			h.broadcaster.RemoveConnection(playerID)
+		}
 		h.mu.Lock()
 		h.game.RemovePlayer(playerID)
 		h.mu.Unlock()
@@ -81,4 +100,20 @@ func (h *Handler) readLoop(conn *websocket.Conn, playerID string) {
 			h.onInput(&event)
 		}
 	}
+}
+
+// AddSpectator handles spectator WebSocket connections
+func (h *Handler) AddSpectator(w http.ResponseWriter, r *http.Request, spectatorID, matchID string) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("Failed to upgrade spectator WebSocket: %v", err)
+		return
+	}
+
+	if h.broadcaster != nil {
+		h.broadcaster.AddSpectator(spectatorID, conn)
+		log.Printf("Spectator %s registered with broadcaster", spectatorID)
+	}
+
+	log.Printf("Spectator %s connected to match %s", spectatorID, matchID)
 }

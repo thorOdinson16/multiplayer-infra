@@ -48,11 +48,15 @@ func (gs *GameState) AddPlayer(playerID, username string) {
 		return
 	}
 
+	// Position players at different starting spots (100,100), (200,100), etc.
+	startX := 100.0 + float64(len(gs.Players))*100.0
+	startY := 100.0
+
 	gs.Players[playerID] = &PlayerState{
 		PlayerID:  playerID,
 		Username:  username,
-		X:         float64(len(gs.Players) * 100),
-		Y:         float64(len(gs.Players) * 100),
+		X:         startX,
+		Y:         startY,
 		Health:    100,
 		Score:     0,
 		Connected: true,
@@ -79,7 +83,7 @@ func (gs *GameState) ReconnectPlayer(playerID string) {
 	}
 }
 
-// UpdatePlayerPosition updates a player's position
+// UpdatePlayerPosition updates a player's position (absolute)
 func (gs *GameState) UpdatePlayerPosition(playerID string, x, y float64) {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
@@ -87,6 +91,19 @@ func (gs *GameState) UpdatePlayerPosition(playerID string, x, y float64) {
 	if p, ok := gs.Players[playerID]; ok && p.Connected {
 		p.X = clamp(x, 0, 1000)
 		p.Y = clamp(y, 0, 1000)
+	}
+}
+
+// MovePlayer adds delta to player's position (relative movement)
+func (gs *GameState) MovePlayer(playerID string, deltaX, deltaY float64) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	if p, ok := gs.Players[playerID]; ok && p.Connected {
+		newX := p.X + deltaX
+		newY := p.Y + deltaY
+		p.X = clamp(newX, 0, 1000)
+		p.Y = clamp(newY, 0, 1000)
 	}
 }
 

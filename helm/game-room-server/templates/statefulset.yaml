@@ -29,6 +29,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: POD_IP
               valueFrom:
                 fieldRef:
@@ -38,7 +42,7 @@ spec:
             - name: RAFT_DATA_DIR
               value: {{ .Values.raft.dataDir }}
             - name: RAFT_BOOTSTRAP
-              value: {{ .Values.raft.bootstrap | quote }}
+              value: "false"
             - name: COUCHBASE_PASSWORD
               valueFrom:
                 secretKeyRef:

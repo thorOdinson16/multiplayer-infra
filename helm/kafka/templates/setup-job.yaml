@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics-setup
+  namespace: infra
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: create-topics
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              # Wait for Kafka to be ready
+              echo "Waiting for Kafka to be ready..."
+              for i in {1..30}; do
+                if /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 &>/dev/null; then
+                  echo "Kafka is ready"
+                  break
+                fi
+                echo "Attempt $i: Kafka not ready yet..."
+                sleep 2
+              done
+              
+              # Create topics if they don't exist
+              echo "Creating topics..."
+              
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create \
+                --topic match.events --partitions 3 --replication-factor 1 --if-not-exists
+              
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create \
+                --topic match.lifecycle --partitions 3 --replication-factor 1 --if-not-exists
+              
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create \
+                --topic match.telemetry --partitions 3 --replication-factor 1 --if-not-exists
+              
+              echo "Listing created topics:"
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+              
+              echo "Kafka topics setup complete"

@@ -4,6 +4,9 @@
 /services/matchmaking-service/matchmaking-service
 /services/game-room-server/game-room-server
 /services/reconnect-handler/reconnect-handler
-/services/replay-service/replay-service/services/leaderboard-service/leaderboard-service
+/services/replay-service/replay-service
+/services/leaderboard-service/leaderboard-service
 /services/analytics-service/analytics-service
 /services/notification-service/notification-service
+node_modules/
+client/node_modules/
