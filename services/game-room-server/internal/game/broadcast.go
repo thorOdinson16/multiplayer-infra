@@ -1,3 +1,4 @@
+// services/game-room-server/internal/game/broadcast.go
 package game
 
 import (
@@ -10,9 +11,10 @@ import (
 
 // Broadcaster sends state snapshots to connected clients
 type Broadcaster struct {
-	mu          sync.RWMutex
-	connections map[string]*websocket.Conn // playerID -> conn
-	spectators  map[string]*websocket.Conn // spectatorID -> conn
+	mu           sync.RWMutex
+	connections  map[string]*websocket.Conn // playerID -> conn
+	spectators   map[string]*websocket.Conn // spectatorID -> conn
+	emptyCallback func() // Callback when all players disconnect
 }
 
 // NewBroadcaster creates a new broadcaster
@@ -20,6 +22,15 @@ func NewBroadcaster() *Broadcaster {
 	return &Broadcaster{
 		connections: make(map[string]*websocket.Conn),
 		spectators:  make(map[string]*websocket.Conn),
+	}
+}
+
+// NewBroadcasterWithCallback creates a broadcaster with empty room callback
+func NewBroadcasterWithCallback(callback func()) *Broadcaster {
+	return &Broadcaster{
+		connections:  make(map[string]*websocket.Conn),
+		spectators:   make(map[string]*websocket.Conn),
+		emptyCallback: callback,
 	}
 }
 
@@ -35,10 +46,17 @@ func (b *Broadcaster) AddConnection(playerID string, conn *websocket.Conn) {
 func (b *Broadcaster) RemoveConnection(playerID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	
 	if conn, ok := b.connections[playerID]; ok {
 		conn.Close()
 		delete(b.connections, playerID)
 		log.Printf("Broadcaster: removed player %s (remaining: %d)", playerID, len(b.connections))
+		
+		// Check if room is now empty
+		if len(b.connections) == 0 && b.emptyCallback != nil {
+			log.Printf("Room is now empty - triggering room finish")
+			go b.emptyCallback()
+		}
 	}
 }
 

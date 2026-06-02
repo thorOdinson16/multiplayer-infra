@@ -42,6 +42,7 @@ func (c *LifecycleConsumer) Start(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
+				log.Printf("Error reading message: %v", err)
 				time.Sleep(time.Second)
 				continue
 			}
@@ -49,14 +50,40 @@ func (c *LifecycleConsumer) Start(ctx context.Context) {
 			var event struct {
 				Type    string `json:"type"`
 				MatchID string `json:"matchId"`
+				Outcome struct {
+					Winner string         `json:"winner"`
+					Scores map[string]int `json:"scores"`
+				} `json:"outcome"`
 			}
+			
 			if err := json.Unmarshal(msg.Value, &event); err != nil {
+				log.Printf("Failed to unmarshal event: %v", err)
 				continue
 			}
 
 			if event.Type == "match_end" {
-				log.Printf("Match ended: %s — updating leaderboard", event.MatchID)
-				// In production, the full outcome would be in the message body
+				log.Printf("Match ended: %s, winner: %s", event.MatchID, event.Outcome.Winner)
+				
+				// Extract players from scores map
+				var players []string
+				for playerID := range event.Outcome.Scores {
+					players = append(players, playerID)
+				}
+				
+				// Update player stats
+				outcome := &store.MatchOutcome{
+					MatchID: event.MatchID,
+					Players: players,
+					Winner:  event.Outcome.Winner,
+					Scores:  event.Outcome.Scores,
+					EndedAt: time.Now().UTC().Format(time.RFC3339),
+				}
+				
+				if err := c.store.UpdatePlayerStats(outcome); err != nil {
+					log.Printf("Failed to update player stats: %v", err)
+				} else {
+					log.Printf("Successfully updated leaderboard for match %s", event.MatchID)
+				}
 			}
 		}
 	}()

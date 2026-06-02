@@ -48,6 +48,11 @@ spec:
                 secretKeyRef:
                   name: couchbase-credentials
                   key: password
+            - name: ETCD_ENDPOINTS
+              valueFrom:
+                configMapKeyRef:
+                  name: game-room-server-config
+                  key: ETCD_ENDPOINTS
           envFrom:
             - configMapRef:
                 name: game-room-server-config

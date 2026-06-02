@@ -1,3 +1,4 @@
+// services/game-room-server/internal/game/state.go
 package game
 
 import (
@@ -24,7 +25,8 @@ type GameState struct {
 	Players    map[string]*PlayerState `json:"players"`
 	StartTime  time.Time               `json:"startTime"`
 	MaxPlayers int                     `json:"maxPlayers"`
-	Status     string                  `json:"status"` // "waiting", "running", "finished"
+	Status     string                  `json:"status"`    // "waiting", "running", "finished"
+	Duration   int                     `json:"duration"`  // Match duration in seconds (default 300 = 5 minutes)
 }
 
 // NewGameState creates a new game state
@@ -36,6 +38,7 @@ func NewGameState(matchID string, maxPlayers int) *GameState {
 		StartTime:  time.Now().UTC(),
 		MaxPlayers: maxPlayers,
 		Status:     "waiting",
+		Duration:   300, // 5 minutes default match duration
 	}
 }
 
@@ -119,6 +122,7 @@ func (gs *GameState) GetSnapshot() *GameState {
 		StartTime:  gs.StartTime,
 		MaxPlayers: gs.MaxPlayers,
 		Status:     gs.Status,
+		Duration:   gs.Duration,
 	}
 
 	for id, p := range gs.Players {
@@ -136,12 +140,52 @@ func (gs *GameState) SetStatus(status string) {
 	gs.Status = status
 }
 
+// GetStatus returns the current game status
+func (gs *GameState) GetStatus() string {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.Status
+}
+
 // IncrementTick advances the tick counter
 func (gs *GameState) IncrementTick() uint64 {
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	gs.Tick++
 	return gs.Tick
+}
+
+// IsMatchFinished returns true if the match has ended
+func (gs *GameState) IsMatchFinished() bool {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.Status == "finished"
+}
+
+// GetConnectedPlayerCount returns number of connected players
+func (gs *GameState) GetConnectedPlayerCount() int {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+
+	count := 0
+	for _, p := range gs.Players {
+		if p.Connected {
+			count++
+		}
+	}
+	return count
+}
+
+// HasActivePlayers returns true if there is at least one connected player
+func (gs *GameState) HasActivePlayers() bool {
+	return gs.GetConnectedPlayerCount() > 0
+}
+
+// IsActive returns true if there are connected players or match is running
+func (gs *GameState) IsActive() bool {
+	gs.mu.RLock()
+	defer gs.mu.RUnlock()
+	return gs.Status == "running" && gs.GetConnectedPlayerCount() > 0
 }
 
 func clamp(val, min, max float64) float64 {

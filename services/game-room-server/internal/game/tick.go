@@ -1,3 +1,4 @@
+// services/game-room-server/internal/game/tick.go
 package game
 
 import (
@@ -14,6 +15,7 @@ type TickLoop struct {
 	tickRate int
 	stopCh   chan struct{}
 	onTick   func(tick uint64, state *GameState)
+	running  bool
 }
 
 // NewTickLoop creates a new tick loop
@@ -26,13 +28,20 @@ func NewTickLoop(state *GameState, tickRate int, onTick func(tick uint64, state 
 		tickRate: tickRate,
 		stopCh:   make(chan struct{}),
 		onTick:   onTick,
+		running:  false,
 	}
 }
 
 // Start begins the tick loop
 func (tl *TickLoop) Start() {
+	if tl.running {
+		log.Println("Tick loop already running")
+		return
+	}
+	
 	interval := time.Second / time.Duration(tl.tickRate)
 	ticker := time.NewTicker(interval)
+	tl.running = true
 
 	log.Printf("Tick loop started: %d TPS (interval: %v)", tl.tickRate, interval)
 
@@ -40,12 +49,21 @@ func (tl *TickLoop) Start() {
 		for {
 			select {
 			case <-ticker.C:
+				// Check if state is finished before ticking
+				if tl.state.IsMatchFinished() {
+					log.Printf("Match is finished, stopping tick loop")
+					ticker.Stop()
+					tl.running = false
+					return
+				}
+				
 				tick := tl.state.IncrementTick()
 				if tl.onTick != nil {
 					tl.onTick(tick, tl.state)
 				}
 			case <-tl.stopCh:
 				ticker.Stop()
+				tl.running = false
 				return
 			}
 		}
@@ -54,5 +72,14 @@ func (tl *TickLoop) Start() {
 
 // Stop stops the tick loop
 func (tl *TickLoop) Stop() {
+	if !tl.running {
+		return
+	}
 	close(tl.stopCh)
+	log.Println("Tick loop stopped")
+}
+
+// IsRunning returns whether the tick loop is running
+func (tl *TickLoop) IsRunning() bool {
+	return tl.running
 }

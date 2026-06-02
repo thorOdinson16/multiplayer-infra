@@ -14,3 +14,4 @@ data:
   TICK_RATE: {{ .Values.tickRate | quote }}
   RAFT_SERVICE: "game-room-server-headless"
   RAFT_NAMESPACE: "game-platform"
+  ETCD_ENDPOINTS: "etcd.infra.svc.cluster.local:2379"
