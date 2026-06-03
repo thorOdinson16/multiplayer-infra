@@ -14,30 +14,31 @@ import (
 
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/game"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type RaftNode struct {
-	raft         *raft.Raft
-	fsm          *FSM
-	dataDir      string
-	nodeID       string
-	etcdClient   *clientv3.Client
-	matchID      string
-	leaderKey    string
-	stopCh       chan struct{}
+	raft       *raft.Raft
+	fsm        *FSM
+	dataDir    string
+	nodeID     string
+	etcdClient *clientv3.Client
+	matchID    string
+	leaderKey  string
+	stopCh     chan struct{}
 }
 
 type Config struct {
-	NodeID         string
-	BindAddr       string
-	DataDir        string
-	Bootstrap      bool
-	Service        string
-	Namespace      string
-	EtcdEndpoints  []string
-	MatchID        string
+	NodeID        string
+	BindAddr      string
+	DataDir       string
+	Bootstrap     bool
+	Service       string
+	Namespace     string
+	EtcdEndpoints []string
+	MatchID       string
+	ClusterSize   int
 }
 
 func NewRaftNode(cfg Config, gameState *game.GameState) (*RaftNode, error) {
@@ -105,28 +106,25 @@ func NewRaftNode(cfg Config, gameState *game.GameState) (*RaftNode, error) {
 		}
 	}
 
-	// Bootstrap only if this is the first node
+	if cfg.ClusterSize <= 0 {
+		cfg.ClusterSize = 3
+	}
+
+	// Bootstrap pod-0, then have the leader add the remaining voters as they become reachable.
 	if cfg.Bootstrap {
-		time.Sleep(2 * time.Second)
-		peers, err := rn.discoverPeers(cfg)
-		if err != nil {
-			log.Printf("Warning: Failed to discover peers: %v", err)
-			configuration := raft.Configuration{
-				Servers: []raft.Server{
-					{
-						ID:      raft.ServerID(cfg.NodeID),
-						Address: raft.ServerAddress(cfg.BindAddr),
-					},
+		configuration := raft.Configuration{
+			Servers: []raft.Server{
+				{
+					ID:      raft.ServerID(cfg.NodeID),
+					Address: raft.ServerAddress(cfg.BindAddr),
 				},
-			}
-			r.BootstrapCluster(configuration)
-		} else if len(peers) > 0 {
-			configuration := raft.Configuration{
-				Servers: peers,
-			}
-			r.BootstrapCluster(configuration)
-			log.Printf("Bootstrapped cluster with %d peers", len(peers))
+			},
 		}
+		future := r.BootstrapCluster(configuration)
+		if err := future.Error(); err != nil && !strings.Contains(err.Error(), "already") {
+			log.Printf("Warning: Failed to bootstrap cluster: %v", err)
+		}
+		go rn.addConfiguredVoters(cfg)
 	} else {
 		go rn.joinCluster(cfg)
 	}
@@ -208,42 +206,104 @@ func (rn *RaftNode) unregisterLeader() {
 	rn.etcdClient.Delete(ctx, rn.leaderKey)
 }
 
-func (rn *RaftNode) discoverPeers(cfg Config) ([]raft.Server, error) {
-	parts := strings.Split(cfg.NodeID, "-")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("cannot parse ordinal from node ID: %s", cfg.NodeID)
-	}
-	currentOrdinal, err := strconv.Atoi(parts[len(parts)-1])
+func (rn *RaftNode) desiredPeers(cfg Config) ([]raft.Server, error) {
+	baseName, _, err := parseNodeOrdinal(cfg.NodeID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid ordinal in node ID: %s", cfg.NodeID)
+		return nil, err
 	}
-	var servers []raft.Server
-	for i := 0; i < currentOrdinal; i++ {
-		peerID := fmt.Sprintf("game-room-server-%d", i)
+
+	servers := make([]raft.Server, 0, cfg.ClusterSize)
+	for i := 0; i < cfg.ClusterSize; i++ {
+		peerID := fmt.Sprintf("%s-%d", baseName, i)
 		peerAddr := fmt.Sprintf("%s.%s.%s.svc.cluster.local:7000", peerID, cfg.Service, cfg.Namespace)
+		if peerID == cfg.NodeID {
+			peerAddr = cfg.BindAddr
+		}
 		servers = append(servers, raft.Server{
 			ID:      raft.ServerID(peerID),
 			Address: raft.ServerAddress(peerAddr),
 		})
 	}
-	servers = append(servers, raft.Server{
-		ID:      raft.ServerID(cfg.NodeID),
-		Address: raft.ServerAddress(cfg.BindAddr),
-	})
 	return servers, nil
 }
 
-func (rn *RaftNode) joinCluster(cfg Config) {
-	time.Sleep(5 * time.Second)
-	for i := 0; i < 30; i++ {
-		leader := rn.raft.Leader()
-		if leader != "" {
-			log.Printf("Found leader: %s, attempting to join", leader)
+func parseNodeOrdinal(nodeID string) (string, int, error) {
+	idx := strings.LastIndex(nodeID, "-")
+	if idx < 0 || idx == len(nodeID)-1 {
+		return "", 0, fmt.Errorf("cannot parse ordinal from node ID: %s", nodeID)
+	}
+	ordinal, err := strconv.Atoi(nodeID[idx+1:])
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid ordinal in node ID: %s", nodeID)
+	}
+	return nodeID[:idx], ordinal, nil
+}
+
+func (rn *RaftNode) addConfiguredVoters(cfg Config) {
+	desired, err := rn.desiredPeers(cfg)
+	if err != nil {
+		log.Printf("Warning: Failed to compute Raft peers: %v", err)
+		return
+	}
+
+	for attempt := 0; attempt < 60; attempt++ {
+		if !rn.IsLeader() {
+			time.Sleep(time.Second)
+			continue
+		}
+
+		configFuture := rn.raft.GetConfiguration()
+		if err := configFuture.Error(); err != nil {
+			log.Printf("Failed to read Raft configuration: %v", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		existing := make(map[raft.ServerID]bool)
+		for _, server := range configFuture.Configuration().Servers {
+			existing[server.ID] = true
+		}
+
+		missing := 0
+		for _, server := range desired {
+			if server.ID == raft.ServerID(cfg.NodeID) || existing[server.ID] {
+				continue
+			}
+
+			missing++
+			future := rn.raft.AddVoter(server.ID, server.Address, 0, 5*time.Second)
+			if err := future.Error(); err != nil {
+				log.Printf("Failed to add Raft voter %s at %s: %v", server.ID, server.Address, err)
+				continue
+			}
+			log.Printf("Added Raft voter %s at %s", server.ID, server.Address)
+		}
+
+		if missing == 0 {
 			return
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(time.Second)
 	}
-	log.Printf("Could not find leader after 60 seconds, running as standalone")
+	log.Printf("Stopped trying to add Raft voters after timeout")
+}
+
+func (rn *RaftNode) joinCluster(cfg Config) {
+	for i := 0; i < 60; i++ {
+		configFuture := rn.raft.GetConfiguration()
+		if err := configFuture.Error(); err == nil {
+			for _, server := range configFuture.Configuration().Servers {
+				if server.ID == raft.ServerID(cfg.NodeID) {
+					log.Printf("Joined Raft cluster as voter %s", cfg.NodeID)
+					return
+				}
+			}
+		}
+		if leader := rn.raft.Leader(); leader != "" {
+			log.Printf("Waiting to be added to Raft cluster by leader %s", leader)
+		}
+		time.Sleep(time.Second)
+	}
+	log.Printf("Could not join Raft cluster after 60 seconds")
 }
 
 func (rn *RaftNode) IsLeader() bool {
@@ -256,7 +316,7 @@ func (rn *RaftNode) ApplyInput(event *game.InputEvent) error {
 		log.Printf("Skipping input - no players connected")
 		return nil
 	}
-	
+
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)

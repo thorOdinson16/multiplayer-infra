@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -84,11 +86,57 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("READY"))
 	})
+	queueHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if !rmqConsumer.IsBrokerAvailable() {
+			http.Error(w, "RabbitMQ unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		var req consumer.MatchmakingMessage
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.PlayerID == "" || req.Username == "" {
+			http.Error(w, "playerId and username required", http.StatusBadRequest)
+			return
+		}
+		if req.Timestamp == "" {
+			req.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		}
+
+		if err := rmqConsumer.PublishRequest(req); err != nil {
+			if errors.Is(err, consumer.ErrBrokerUnavailable) {
+				http.Error(w, "RabbitMQ unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, "failed to enqueue matchmaking request", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"status": "queued"})
+	}
+	mux.HandleFunc("/matchmaking/queue", queueHandler)
+	mux.HandleFunc("/queue", queueHandler)
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write([]byte("# HELP matchmaking_queue_length Current queue length\n"))
 		w.Write([]byte("# TYPE matchmaking_queue_length gauge\n"))
 		w.Write([]byte(fmt.Sprintf("matchmaking_queue_length %d\n", matchmaker.QueueLength())))
+		w.Write([]byte("# HELP matchmaking_broker_unavailable RabbitMQ broker unavailable status\n"))
+		w.Write([]byte("# TYPE matchmaking_broker_unavailable gauge\n"))
+		brokerUnavailable := 0
+		if !rmqConsumer.IsBrokerAvailable() {
+			brokerUnavailable = 1
+		}
+		w.Write([]byte(fmt.Sprintf("matchmaking_broker_unavailable %d\n", brokerUnavailable)))
 	})
 
 	go func() {
@@ -110,7 +158,11 @@ func processLobbies(m *matcher.Matcher, reg *registry.EtcdRegistry, prov *provis
 		log.Printf("Lobby assembled: %d players", len(lobby))
 
 		// Check for available room in etcd
-		room, err := reg.GetAvailableRoom()
+		var room *registry.RoomInfo
+		var err error
+		if reg != nil {
+			room, err = reg.GetAvailableRoom()
+		}
 		if err != nil || room == nil {
 			// No available room — provision new one (FR-MM-05)
 			matchID := generateMatchID()
@@ -124,7 +176,9 @@ func processLobbies(m *matcher.Matcher, reg *registry.EtcdRegistry, prov *provis
 					continue
 				}
 			}
-			reg.RegisterRoom(matchID, "provisioning")
+			if reg != nil {
+				reg.RegisterRoom(matchID, "provisioning")
+			}
 		}
 
 		// Notify players (will be handled by Notification Service)

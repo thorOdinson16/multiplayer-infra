@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/game"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/kafka"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/raft"
@@ -35,6 +34,7 @@ func main() {
 	etcdEndpoints := getEnv("ETCD_ENDPOINTS", "etcd.infra.svc.cluster.local:2379")
 	maxPlayers := getEnvInt("MAX_PLAYERS", 8)
 	tickRate := getEnvInt("TICK_RATE", 20)
+	raftClusterSize := getEnvInt("RAFT_CLUSTER_SIZE", 3)
 	serverPort := getEnv("SERVER_PORT", "8080")
 	matchDuration := getEnvInt("MATCH_DURATION", 300) // 5 minutes default
 
@@ -45,22 +45,23 @@ func main() {
 	// Initialize Raft
 	raftService := getEnv("RAFT_SERVICE", "game-room-server-headless")
 	raftNamespace := getEnv("RAFT_NAMESPACE", "game-platform")
-	
+
 	// Determine if this pod should bootstrap (only pod-0)
 	podName := getEnv("POD_NAME", nodeID)
 	isPodZero := strings.HasSuffix(podName, "-0")
-	
+
 	log.Printf("Raft configuration: nodeID=%s, isPodZero=%v, podName=%s", nodeID, isPodZero, podName)
-	
+
 	raftNode, err := raft.NewRaftNode(raft.Config{
-		NodeID:         nodeID,
-		BindAddr:       bindAddr,
-		DataDir:        dataDir,
-		Bootstrap:      isPodZero,
-		Service:        raftService,
-		Namespace:      raftNamespace,
-		EtcdEndpoints:  []string{etcdEndpoints},
-		MatchID:        matchID,
+		NodeID:        nodeID,
+		BindAddr:      bindAddr,
+		DataDir:       dataDir,
+		Bootstrap:     isPodZero,
+		Service:       raftService,
+		Namespace:     raftNamespace,
+		EtcdEndpoints: []string{etcdEndpoints},
+		MatchID:       matchID,
+		ClusterSize:   raftClusterSize,
 	}, gameState)
 	if err != nil {
 		log.Fatalf("Failed to start Raft: %v", err)
@@ -89,16 +90,10 @@ func main() {
 	}
 	gameState.SetStatus("running")
 
-	// Initialize spectator ring buffer
-	specBuffer := spectator.NewRingBuffer(30, tickRate)
-	spectators := make(map[string]*websocket.Conn)
-	stopSpectator := make(chan struct{})
-	go specBuffer.FlushLoop(spectators, stopSpectator)
-
 	// Track last activity time for empty room detection
 	var emptyRoomTimer *time.Timer
 	var emptyRoomTimerActive bool
-	
+
 	// Define room empty handler - finishes the room when no players
 	roomEmptyHandler := func() {
 		log.Printf("🏁 Room empty - all players left, finishing match %s", matchID)
@@ -113,6 +108,11 @@ func main() {
 
 	// Initialize broadcaster with empty room callback
 	broadcaster := game.NewBroadcasterWithCallback(roomEmptyHandler)
+
+	// Initialize spectator ring buffer
+	specBuffer := spectator.NewRingBuffer(30, tickRate)
+	stopSpectator := make(chan struct{})
+	go specBuffer.FlushLoop(broadcaster, stopSpectator)
 
 	// WebSocket handler
 	wsHandler := ws.NewHandler(gameState, func(event *game.InputEvent) {
@@ -134,7 +134,7 @@ func main() {
 	// Track if tick loop is running
 	var tickLoop *game.TickLoop
 	var tickLoopRunning bool
-	
+
 	// Function to stop tick loop if running
 	stopTickLoop := func() {
 		if tickLoopRunning && tickLoop != nil {
@@ -143,7 +143,7 @@ func main() {
 			tickLoopRunning = false
 		}
 	}
-	
+
 	// Function to start tick loop if not running and there are players
 	startTickLoopIfNeeded := func() {
 		if !tickLoopRunning && gameState.GetConnectedPlayerCount() > 0 && gameState.GetStatus() == "running" {
@@ -156,7 +156,7 @@ func main() {
 					stopTickLoop()
 					return
 				}
-				
+
 				// Check for empty room
 				if state.GetConnectedPlayerCount() == 0 {
 					if !emptyRoomTimerActive {
@@ -174,31 +174,31 @@ func main() {
 					}
 					return
 				}
-				
+
 				// Reset empty room timer if we have players
 				if emptyRoomTimerActive {
 					emptyRoomTimer.Stop()
 					emptyRoomTimerActive = false
 				}
-				
+
 				// Broadcast state to players (FR-GR-04)
 				broadcaster.BroadcastToPlayers(state)
-				
+
 				// Enqueue for spectators (ADR-07)
 				specBuffer.Enqueue(tick, state)
-				
+
 				// Debug: Log every 20 ticks
 				if tick%20 == 0 {
 					log.Printf("🔔 Tick %d - Players: %d (connected: %d)", tick, len(state.Players), state.GetConnectedPlayerCount())
 				}
-				
+
 				// Publish to Kafka every 5 ticks to reduce load
 				if tick%5 == 0 {
 					if err := kafkaPub.PublishTickEvent(ctx, matchID, tick, state); err != nil {
 						log.Printf("Failed to publish tick event: %v", err)
 					}
 				}
-				
+
 				// Publish telemetry every 100 ticks (5 seconds at 20 TPS)
 				if tick%100 == 0 && state.GetConnectedPlayerCount() > 0 {
 					log.Printf("📊 Publishing telemetry at tick %d, players: %d", tick, state.GetConnectedPlayerCount())
@@ -210,7 +210,7 @@ func main() {
 						}
 					}
 				}
-				
+
 				// Save state to Redis every 10 ticks
 				if tick%10 == 0 && redisStore != nil {
 					if err := redisStore.SaveState(ctx, matchID, state, 10*time.Minute); err != nil {
@@ -222,13 +222,13 @@ func main() {
 			tickLoopRunning = true
 		}
 	}
-	
+
 	// Start tick loop initially if there are players
 	startTickLoopIfNeeded()
 
 	// HTTP server
 	mux := http.NewServeMux()
-	
+
 	// Leader endpoint for discovery
 	mux.HandleFunc("/leader", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -246,7 +246,7 @@ func main() {
 			})
 		}
 	})
-	
+
 	mux.HandleFunc("/game/", func(w http.ResponseWriter, r *http.Request) {
 		playerID := r.URL.Query().Get("playerId")
 		username := r.URL.Query().Get("username")
@@ -258,7 +258,7 @@ func main() {
 		// After connection, try to start tick loop
 		startTickLoopIfNeeded()
 	})
-	
+
 	// Add spectator endpoint
 	mux.HandleFunc("/spectate/", func(w http.ResponseWriter, r *http.Request) {
 		spectatorID := r.URL.Query().Get("spectatorId")
@@ -269,7 +269,7 @@ func main() {
 		}
 		wsHandler.AddSpectator(w, r, spectatorID, matchIDParam)
 	})
-	
+
 	// Match status endpoint - allows checking if room is finished
 	mux.HandleFunc("/match/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -282,7 +282,7 @@ func main() {
 			"tickLoopRunning": tickLoopRunning,
 		})
 	})
-	
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
@@ -329,7 +329,7 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down Game Room Server...")
-	
+
 	// Publish match end if not already finished
 	if !gameState.IsMatchFinished() {
 		log.Printf("Match ending due to shutdown - publishing match end event")
@@ -340,12 +340,12 @@ func main() {
 	} else {
 		log.Printf("Match already finished, skipping end event")
 	}
-	
+
 	stopTickLoop()
 	if emptyRoomTimerActive {
 		emptyRoomTimer.Stop()
 	}
-	stopSpectator <- struct{}{}
+	close(stopSpectator)
 	broadcaster.CloseAll()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

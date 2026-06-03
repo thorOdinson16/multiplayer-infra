@@ -8,7 +8,7 @@ metadata:
 spec:
   serviceName: game-room-server-headless
   replicas: {{ .Values.replicaCount }}
-  podManagementPolicy: Parallel
+  podManagementPolicy: OrderedReady
   selector:
     matchLabels:
       app: game-room-server
@@ -41,8 +41,6 @@ spec:
               value: "$(POD_IP):7000"
             - name: RAFT_DATA_DIR
               value: {{ .Values.raft.dataDir }}
-            - name: RAFT_BOOTSTRAP
-              value: "false"
             - name: COUCHBASE_PASSWORD
               valueFrom:
                 secretKeyRef:

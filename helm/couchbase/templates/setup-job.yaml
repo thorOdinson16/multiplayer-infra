@@ -19,11 +19,23 @@ spec:
             - /bin/sh
             - -c
             - |
-              until wget -q -O- http://couchbase.infra.svc.cluster.local:8091/pools > /dev/null 2>&1; do
+              AUTH=$(echo -n "${CB_USERNAME}:${CB_PASSWORD}" | base64)
+              until wget -q -O- --header="Authorization: Basic ${AUTH}" http://couchbase.infra.svc.cluster.local:8091/pools > /dev/null 2>&1; do
                 echo "Waiting for Couchbase..."
                 sleep 5
               done
               echo "Couchbase is ready"
+          env:
+            - name: CB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: couchbase-credentials
+                  key: username
+            - name: CB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: couchbase-credentials
+                  key: password
       containers:
         - name: setup
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -42,7 +54,6 @@ spec:
             - /bin/bash
             - -c
             - |
-              # Initialize cluster with reduced memory (dev single-node)
               couchbase-cli cluster-init \
                 -c couchbase.infra.svc.cluster.local:8091 \
                 --cluster-username $CB_USERNAME \
@@ -50,9 +61,8 @@ spec:
                 --services data,index,query \
                 --cluster-ramsize 1024 \
                 --cluster-index-ramsize 256 \
-                --index-storage-setting default
-              
-              # Create buckets per §8.1
+                --index-storage-setting default || true
+
               {{- range .Values.buckets }}
               couchbase-cli bucket-create \
                 -c couchbase.infra.svc.cluster.local:8091 \
@@ -61,7 +71,22 @@ spec:
                 --bucket {{ .name }} \
                 --bucket-type {{ .type }} \
                 --bucket-ramsize {{ .ramQuotaMB }} \
-                --wait
+                --wait || true
               {{- end }}
-              
+
+              for STMT in \
+                "CREATE PRIMARY INDEX IF NOT EXISTS idx_players_primary ON players" \
+                "CREATE INDEX IF NOT EXISTS idx_players_type_username ON players(type, username)" \
+                "CREATE INDEX IF NOT EXISTS idx_players_score ON players(score)" \
+                "CREATE INDEX IF NOT EXISTS idx_players_wins ON players(wins)" \
+                "CREATE INDEX IF NOT EXISTS idx_players_player_id ON players(playerId)" \
+                "CREATE INDEX IF NOT EXISTS idx_players_timestamp ON players(timestamp)" \
+                "CREATE INDEX IF NOT EXISTS idx_players_match_stats_window ON players(type, timestamp, playerId, score, win, loss)"; do
+                /opt/couchbase/bin/cbq \
+                  -u "$CB_USERNAME" \
+                  -p "$CB_PASSWORD" \
+                  -e http://couchbase.infra.svc.cluster.local:8093 \
+                  --script="$STMT" || true
+              done
+
               echo "Couchbase setup complete"

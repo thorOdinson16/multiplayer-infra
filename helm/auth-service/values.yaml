@@ -11,6 +11,7 @@ couchbase:
   password: "password"
 
 jwt:
+  secret: "change-me-local-dev-jwt-secret-32-bytes"
   expiryHours: 24
 
 resources:

@@ -2,8 +2,10 @@ package consumer
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/rabbitmq/amqp091-go"
@@ -20,6 +22,7 @@ type MatchmakingMessage struct {
 
 // RabbitMQConsumer consumes matchmaking requests from RabbitMQ
 type RabbitMQConsumer struct {
+	mu              sync.RWMutex
 	conn            *amqp091.Connection
 	channel         *amqp091.Channel
 	matcher         *matcher.Matcher
@@ -27,6 +30,8 @@ type RabbitMQConsumer struct {
 	uri             string
 	brokerAvailable bool
 }
+
+var ErrBrokerUnavailable = errors.New("rabbitmq broker unavailable")
 
 // NewRabbitMQConsumer creates a new RabbitMQ consumer
 func NewRabbitMQConsumer(url, queueName string, m *matcher.Matcher) (*RabbitMQConsumer, error) {
@@ -53,7 +58,52 @@ func NewRabbitMQConsumer(url, queueName string, m *matcher.Matcher) (*RabbitMQCo
 
 // IsBrokerAvailable returns whether RabbitMQ is reachable (FR-MM-07)
 func (c *RabbitMQConsumer) IsBrokerAvailable() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.brokerAvailable
+}
+
+func (c *RabbitMQConsumer) setBrokerAvailable(available bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.brokerAvailable = available
+}
+
+// PublishRequest publishes a new matchmaking request to RabbitMQ.
+func (c *RabbitMQConsumer) PublishRequest(msg MatchmakingMessage) error {
+	if !c.IsBrokerAvailable() {
+		return ErrBrokerUnavailable
+	}
+
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal matchmaking request: %w", err)
+	}
+
+	c.mu.RLock()
+	channel := c.channel
+	c.mu.RUnlock()
+	if channel == nil {
+		c.setBrokerAvailable(false)
+		return ErrBrokerUnavailable
+	}
+
+	if err := channel.Publish(
+		"",
+		c.queue,
+		false,
+		false,
+		amqp091.Publishing{
+			ContentType:  "application/json",
+			DeliveryMode: amqp091.Persistent,
+			Body:         body,
+		},
+	); err != nil {
+		c.setBrokerAvailable(false)
+		return ErrBrokerUnavailable
+	}
+
+	return nil
 }
 
 // Start begins consuming messages from the queue
@@ -77,7 +127,7 @@ func (c *RabbitMQConsumer) Start() error {
 		for msg := range msgs {
 			c.handleMessage(msg)
 		}
-		c.brokerAvailable = false
+		c.setBrokerAvailable(false)
 	}()
 
 	go c.monitorBroker()
@@ -114,18 +164,30 @@ func (c *RabbitMQConsumer) monitorBroker() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if c.conn.IsClosed() {
-			c.brokerAvailable = false
+		c.mu.RLock()
+		conn := c.conn
+		c.mu.RUnlock()
+
+		if conn == nil {
+			c.setBrokerAvailable(false)
+			continue
+		}
+
+		if conn.IsClosed() {
+			c.setBrokerAvailable(false)
 			conn, err := amqp091.Dial(c.uri)
 			if err == nil {
-				c.conn = conn
 				channel, err := conn.Channel()
 				if err == nil {
+					c.mu.Lock()
+					c.conn = conn
 					c.channel = channel
 					c.brokerAvailable = true
+					c.mu.Unlock()
 					c.Start()
 					return
 				}
+				conn.Close()
 			}
 		}
 	}

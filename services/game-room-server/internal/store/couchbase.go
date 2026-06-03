@@ -1,20 +1,16 @@
 package store
 
-import (
-	"time"
-
-	"github.com/couchbase/gocb/v2"
-)
+import "github.com/couchbase/gocb/v2"
 
 // MatchRecord represents a completed match in Couchbase (§8.1)
 type MatchRecord struct {
-	Type        string           `json:"type"`
-	MatchID     string           `json:"matchId"`
-	Players     []string         `json:"players"`
-	StartedAt   string           `json:"startedAt"`
-	EndedAt     string           `json:"endedAt"`
-	DurationSec int              `json:"durationSeconds"`
-	Outcome     MatchOutcome     `json:"outcome"`
+	Type        string       `json:"type"`
+	MatchID     string       `json:"matchId"`
+	Players     []string     `json:"players"`
+	StartedAt   string       `json:"startedAt"`
+	EndedAt     string       `json:"endedAt"`
+	DurationSec int          `json:"durationSeconds"`
+	Outcome     MatchOutcome `json:"outcome"`
 }
 
 // MatchOutcome represents match results
@@ -25,8 +21,8 @@ type MatchOutcome struct {
 
 // CouchbaseStore handles Couchbase operations for game rooms
 type CouchbaseStore struct {
-	cluster    *gocb.Cluster
-	matchColl  *gocb.Collection
+	cluster   *gocb.Cluster
+	matchColl *gocb.Collection
 }
 
 // NewCouchbaseStore creates a new Couchbase store connection

@@ -6,19 +6,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/game"
 )
 
 // RingBuffer implements a fixed-size circular buffer for spectator delay (ADR-07)
 type RingBuffer struct {
-	mu       sync.RWMutex
-	buffer   []*TickSnapshot
-	size     int
-	head     int
-	tail     int
-	count    int
-	delay    time.Duration
+	mu     sync.RWMutex
+	buffer []*TickSnapshot
+	size   int
+	head   int
+	tail   int
+	count  int
+	delay  time.Duration
 }
 
 // TickSnapshot is a timestamped game state snapshot
@@ -89,8 +88,8 @@ func (rb *RingBuffer) GetSnapshot() *TickSnapshot {
 	return best
 }
 
-// FlushLoop continuously sends delayed state to spectator connections
-func (rb *RingBuffer) FlushLoop(spectators map[string]*websocket.Conn, stopCh chan struct{}) {
+// FlushLoop continuously sends delayed state to spectator connections.
+func (rb *RingBuffer) FlushLoop(broadcaster *game.Broadcaster, stopCh <-chan struct{}) {
 	ticker := time.NewTicker(50 * time.Millisecond) // 20 TPS flush rate
 	defer ticker.Stop()
 
@@ -108,11 +107,7 @@ func (rb *RingBuffer) FlushLoop(spectators map[string]*websocket.Conn, stopCh ch
 				continue
 			}
 
-			for id, conn := range spectators {
-				if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-					log.Printf("Failed to send to spectator %s: %v", id, err)
-				}
-			}
+			broadcaster.BroadcastSpectatorPayload(data)
 		case <-stopCh:
 			return
 		}

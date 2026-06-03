@@ -34,9 +34,9 @@ type Session struct {
 
 // CouchbaseStore handles Couchbase operations for auth
 type CouchbaseStore struct {
-	cluster    *gocb.Cluster
-	bucket     *gocb.Bucket
-	playerColl *gocb.Collection
+	cluster     *gocb.Cluster
+	bucket      *gocb.Bucket
+	playerColl  *gocb.Collection
 	sessionColl *gocb.Collection
 }
 
@@ -51,9 +51,17 @@ func NewCouchbaseStore(connStr, username, password string) (*CouchbaseStore, err
 	}
 
 	bucket := cluster.Bucket("players")
+	if err := bucket.WaitUntilReady(30*time.Second, nil); err != nil {
+		cluster.Close(nil)
+		return nil, err
+	}
 	playerColl := bucket.Scope("_default").Collection("_default")
 
 	sessionBucket := cluster.Bucket("sessions")
+	if err := sessionBucket.WaitUntilReady(30*time.Second, nil); err != nil {
+		cluster.Close(nil)
+		return nil, err
+	}
 	sessionColl := sessionBucket.Scope("_default").Collection("_default")
 
 	return &CouchbaseStore{
@@ -66,7 +74,7 @@ func NewCouchbaseStore(connStr, username, password string) (*CouchbaseStore, err
 
 // GetPlayerByUsername retrieves a player by username
 func (s *CouchbaseStore) GetPlayerByUsername(username string) (*Player, error) {
-	query := "SELECT * FROM players WHERE type = 'player' AND username = $1"
+	query := "SELECT p.* FROM players p WHERE p.type = 'player' AND p.username = $1"
 	rows, err := s.cluster.Query(query, &gocb.QueryOptions{
 		PositionalParameters: []interface{}{username},
 	})
@@ -77,13 +85,9 @@ func (s *CouchbaseStore) GetPlayerByUsername(username string) (*Player, error) {
 
 	var player Player
 	for rows.Next() {
-		var row struct {
-			Players Player `json:"players"`
-		}
-		if err := rows.Row(&row); err != nil {
+		if err := rows.Row(&player); err != nil {
 			return nil, err
 		}
-		player = row.Players
 		return &player, nil
 	}
 
