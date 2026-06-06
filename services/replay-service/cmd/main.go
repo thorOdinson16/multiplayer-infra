@@ -13,6 +13,7 @@ import (
 	"github.com/thorOdinson16/multiplayer-infra/services/replay-service/internal/archive"
 	"github.com/thorOdinson16/multiplayer-infra/services/replay-service/internal/checkpoint"
 	"github.com/thorOdinson16/multiplayer-infra/services/replay-service/internal/consumer"
+	"github.com/thorOdinson16/multiplayer-infra/services/replay-service/internal/observability"
 )
 
 func main() {
@@ -24,6 +25,14 @@ func main() {
 	minioUser := getEnv("MINIO_USER", "minioadmin")
 	minioPass := getEnv("MINIO_PASSWORD", "minioadmin")
 	serverPort := getEnv("SERVER_PORT", "8080")
+	otelEndpoint := getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	tracingShutdown, err := observability.InitTracing(context.Background(), "replay-service", otelEndpoint)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize tracing: %v", err)
+	} else {
+		defer tracingShutdown(context.Background())
+	}
 
 	// Initialize checkpoint writer
 	connStr := "couchbase://" + couchbaseHost
@@ -59,10 +68,18 @@ func main() {
 
 	// Start consuming match.lifecycle
 	lifecycleConsumer := consumer.NewLifecycleConsumer([]string{kafkaBrokers})
-	lifecycleConsumer.SetMatchEndHandler(func(matchID string) {
-		log.Printf("Match ended: %s — triggering replay finalization", matchID)
+	lifecycleConsumer.SetMatchEndHandler(func(ctx context.Context, matchID string) {
+		log.Printf("Match ended: %s - triggering replay finalization", matchID)
 		if arch != nil && cpWriter != nil {
-			// Archive would use the stored events
+			events := cpWriter.DrainEvents(matchID)
+			if len(events) == 0 {
+				log.Printf("No replay events buffered for match %s", matchID)
+				return
+			}
+			if err := arch.ArchiveMatch(ctx, matchID, events); err != nil {
+				log.Printf("Failed to archive replay for match %s: %v", matchID, err)
+				return
+			}
 			log.Printf("Replay finalized for match %s", matchID)
 		}
 	})

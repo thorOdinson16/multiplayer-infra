@@ -22,6 +22,9 @@ couchbase:
 
 maxPlayers: 8
 tickRate: 20
+matchId: demo-match
+otel:
+  endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
 
 resources:
   requests:

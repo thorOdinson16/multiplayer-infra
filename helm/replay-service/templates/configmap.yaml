@@ -11,3 +11,4 @@ data:
   COUCHBASE_USER: {{ .Values.couchbase.user }}
   MINIO_ENDPOINT: {{ .Values.minio.endpoint }}
   MINIO_USER: {{ .Values.minio.user }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.otel.endpoint | quote }}

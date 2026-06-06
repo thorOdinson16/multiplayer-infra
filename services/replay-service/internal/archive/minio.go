@@ -10,6 +10,8 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/thorOdinson16/multiplayer-infra/services/replay-service/internal/consumer"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Archiver archives completed replays to MinIO (FR-RP-04)
@@ -48,8 +50,10 @@ func NewArchiver(endpoint, accessKey, secretKey, bucket string) (*Archiver, erro
 }
 
 // ArchiveMatch archives match events to MinIO (FR-RP-04, FR-RP-06)
-func (a *Archiver) ArchiveMatch(matchID string, events []*consumer.MatchEvent) error {
-	ctx := context.Background()
+func (a *Archiver) ArchiveMatch(ctx context.Context, matchID string, events []*consumer.MatchEvent) error {
+	ctx, span := otel.Tracer("replay-service").Start(ctx, "minio.archive replay")
+	defer span.End()
+	span.SetAttributes(attribute.String("match.id", matchID), attribute.Int("replay.events", len(events)))
 
 	data, err := json.Marshal(events)
 	if err != nil {

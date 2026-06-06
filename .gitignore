@@ -10,3 +10,4 @@
 /services/notification-service/notification-service
 node_modules/
 client/node_modules/
+*output.md

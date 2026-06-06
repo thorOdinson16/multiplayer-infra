@@ -7,6 +7,29 @@ on:
     branches: [main]
 
 jobs:
+  test-services:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - matchmaking-service
+          - game-room-server
+          - reconnect-handler
+          - replay-service
+          - leaderboard-service
+          - analytics-service
+          - notification-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Run tests
+        run: |
+          cd services/${{ matrix.service }}
+          go test ./...
+
   validate-helm:
     runs-on: ubuntu-latest
     steps:
@@ -83,3 +106,36 @@ jobs:
           test -f services/leaderboard-service/Dockerfile && echo "Leaderboard Dockerfile OK"
           test -f services/analytics-service/Dockerfile && echo "Analytics Dockerfile OK"
           test -f services/notification-service/Dockerfile && echo "Notification Dockerfile OK"
+
+  docker-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - matchmaking-service
+          - game-room-server
+          - reconnect-handler
+          - replay-service
+          - leaderboard-service
+          - analytics-service
+          - notification-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest

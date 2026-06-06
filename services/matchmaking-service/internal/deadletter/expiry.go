@@ -16,6 +16,12 @@ type ExpiredRequest struct {
 	ExpiredAt string `json:"expiredAt"`
 }
 
+type notification struct {
+	Type     string `json:"type"`
+	PlayerID string `json:"playerId"`
+	Message  string `json:"message"`
+}
+
 // ExpiryHandler handles expired matchmaking requests (FR-MM-08)
 type ExpiryHandler struct {
 	conn    *amqp091.Connection
@@ -99,10 +105,29 @@ func (h *ExpiryHandler) ProcessExpired() error {
 			if err := json.Unmarshal(msg.Body, &req); err != nil {
 				continue
 			}
-			log.Printf("Player %s matchmaking expired — notifying via Notification Service", req.PlayerID)
-			// Notification dispatch will be handled by the Notification Service
+			log.Printf("Player %s matchmaking expired - notifying via Notification Service", req.PlayerID)
+			if err := h.publishNotification(req); err != nil {
+				log.Printf("Failed to publish expiry notification for player %s: %v", req.PlayerID, err)
+			}
 		}
 	}()
 
 	return nil
+}
+
+func (h *ExpiryHandler) publishNotification(req ExpiredRequest) error {
+	n := notification{
+		Type:     "match_expired",
+		PlayerID: req.PlayerID,
+		Message:  "Matchmaking request expired; please queue again.",
+	}
+	body, err := json.Marshal(n)
+	if err != nil {
+		return err
+	}
+	return h.channel.Publish("", "notifications.match.expired", false, false, amqp091.Publishing{
+		ContentType: "application/json",
+		Body:        body,
+		Timestamp:   time.Now(),
+	})
 }

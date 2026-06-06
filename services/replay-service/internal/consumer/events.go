@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // MatchEvent is a tick event from match.events topic
@@ -66,12 +69,24 @@ func (c *EventConsumer) Start(ctx context.Context) {
 				log.Printf("Failed to unmarshal event: %v", err)
 				continue
 			}
+			msgCtx := extractTraceContext(ctx, msg.Headers)
+			_, span := otel.Tracer("replay-service").Start(msgCtx, "kafka.consume match.events")
+			span.SetAttributes(attribute.String("match.id", event.MatchID), attribute.Int64("match.tick", int64(event.Tick)))
 
 			if c.onEvent != nil {
 				c.onEvent(&event)
 			}
+			span.End()
 		}
 	}()
+}
+
+func extractTraceContext(ctx context.Context, headers []kafka.Header) context.Context {
+	carrier := propagation.MapCarrier{}
+	for _, header := range headers {
+		carrier.Set(header.Key, string(header.Value))
+	}
+	return otel.GetTextMapPropagator().Extract(ctx, carrier)
 }
 
 // Close closes the consumer

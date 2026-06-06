@@ -18,6 +18,9 @@ minio:
   user: minioadmin
   password: "minioadmin"
 
+otel:
+  endpoint: "otel-collector.monitoring.svc.cluster.local:4317"
+
 resources:
   requests:
     memory: "64Mi"

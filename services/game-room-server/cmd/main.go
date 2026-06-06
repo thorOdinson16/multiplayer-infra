@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/game"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/kafka"
+	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/observability"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/raft"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/redis"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/spectator"
@@ -37,6 +38,14 @@ func main() {
 	raftClusterSize := getEnvInt("RAFT_CLUSTER_SIZE", 3)
 	serverPort := getEnv("SERVER_PORT", "8080")
 	matchDuration := getEnvInt("MATCH_DURATION", 300) // 5 minutes default
+	otelEndpoint := getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	tracingShutdown, err := observability.InitTracing(context.Background(), "game-room-server", otelEndpoint)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize tracing: %v", err)
+	} else {
+		defer tracingShutdown(context.Background())
+	}
 
 	// Initialize game state
 	gameState := game.NewGameState(matchID, maxPlayers)
@@ -79,7 +88,9 @@ func main() {
 	if err != nil {
 		log.Printf("Warning: Failed to connect to Redis: %v", err)
 	}
-	defer redisStore.Close()
+	if redisStore != nil {
+		defer redisStore.Close()
+	}
 
 	// Publish match start
 	ctx := context.Background()
@@ -115,6 +126,7 @@ func main() {
 	go specBuffer.FlushLoop(broadcaster, stopSpectator)
 
 	// WebSocket handler
+	matchTTL := time.Duration(matchDuration+60) * time.Second
 	wsHandler := ws.NewHandler(gameState, func(event *game.InputEvent) {
 		// Only process input if there are connected players
 		if gameState.GetConnectedPlayerCount() == 0 {
@@ -129,7 +141,14 @@ func main() {
 		} else {
 			log.Printf("Ignoring input - not leader (current leader: %s)", raftNode.LeaderAddress())
 		}
-	}, broadcaster)
+	}, broadcaster, func(playerID string) {
+		if redisStore == nil {
+			return
+		}
+		if err := redisStore.AddPlayerToMatch(ctx, matchID, playerID, matchTTL); err != nil {
+			log.Printf("Failed to add player %s to Redis match membership: %v", playerID, err)
+		}
+	})
 
 	// Track if tick loop is running
 	var tickLoop *game.TickLoop
@@ -213,7 +232,7 @@ func main() {
 
 				// Save state to Redis every 10 ticks
 				if tick%10 == 0 && redisStore != nil {
-					if err := redisStore.SaveState(ctx, matchID, state, 10*time.Minute); err != nil {
+					if err := redisStore.SaveState(ctx, matchID, state, matchTTL); err != nil {
 						log.Printf("Failed to save state to Redis: %v", err)
 					}
 				}

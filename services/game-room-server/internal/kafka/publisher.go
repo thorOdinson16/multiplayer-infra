@@ -9,6 +9,9 @@ import (
 
 	"github.com/segmentio/kafka-go"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/game"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // Publisher publishes game events to Kafka topics
@@ -20,11 +23,11 @@ type Publisher struct {
 
 // MatchEvent represents a game tick event for Kafka
 type MatchEvent struct {
-	Type    string           `json:"type"`
-	MatchID string           `json:"matchId"`
-	Tick    uint64           `json:"tick"`
-	State   *game.GameState  `json:"state"`
-	Time    string           `json:"time"`
+	Type    string          `json:"type"`
+	MatchID string          `json:"matchId"`
+	Tick    uint64          `json:"tick"`
+	State   *game.GameState `json:"state"`
+	Time    string          `json:"time"`
 }
 
 // LifecycleEvent represents a match lifecycle event
@@ -69,6 +72,10 @@ func NewPublisher(brokers []string) *Publisher {
 
 // PublishTickEvent publishes a game tick to match.events (FR-GR-05)
 func (p *Publisher) PublishTickEvent(ctx context.Context, matchID string, tick uint64, state *game.GameState) error {
+	ctx, span := otel.Tracer("game-room-server").Start(ctx, "kafka.publish match.events")
+	defer span.End()
+	span.SetAttributes(attribute.String("match.id", matchID), attribute.Int64("match.tick", int64(tick)))
+
 	event := MatchEvent{
 		Type:    "tick",
 		MatchID: matchID,
@@ -83,9 +90,10 @@ func (p *Publisher) PublishTickEvent(ctx context.Context, matchID string, tick u
 	}
 
 	msg := kafka.Message{
-		Key:   []byte(matchID),
-		Value: data,
-		Time:  time.Now(),
+		Key:     []byte(matchID),
+		Value:   data,
+		Time:    time.Now(),
+		Headers: traceHeaders(ctx),
 	}
 
 	if err := p.eventsWriter.WriteMessages(ctx, msg); err != nil {
@@ -98,6 +106,10 @@ func (p *Publisher) PublishTickEvent(ctx context.Context, matchID string, tick u
 
 // PublishMatchStart publishes a match start event (FR-GR-09)
 func (p *Publisher) PublishMatchStart(ctx context.Context, matchID string) error {
+	ctx, span := otel.Tracer("game-room-server").Start(ctx, "kafka.publish match.lifecycle")
+	defer span.End()
+	span.SetAttributes(attribute.String("match.id", matchID), attribute.String("match.lifecycle", "match_start"))
+
 	event := LifecycleEvent{
 		Type:    "match_start",
 		MatchID: matchID,
@@ -110,13 +122,18 @@ func (p *Publisher) PublishMatchStart(ctx context.Context, matchID string) error
 	}
 
 	return p.lifecycleWriter.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(matchID),
-		Value: data,
+		Key:     []byte(matchID),
+		Value:   data,
+		Headers: traceHeaders(ctx),
 	})
 }
 
 // PublishMatchEnd publishes a match end event (FR-GR-09)
 func (p *Publisher) PublishMatchEnd(ctx context.Context, matchID string) error {
+	ctx, span := otel.Tracer("game-room-server").Start(ctx, "kafka.publish match.lifecycle")
+	defer span.End()
+	span.SetAttributes(attribute.String("match.id", matchID), attribute.String("match.lifecycle", "match_end"))
+
 	event := LifecycleEvent{
 		Type:    "match_end",
 		MatchID: matchID,
@@ -129,13 +146,18 @@ func (p *Publisher) PublishMatchEnd(ctx context.Context, matchID string) error {
 	}
 
 	return p.lifecycleWriter.WriteMessages(ctx, kafka.Message{
-		Key:   []byte(matchID),
-		Value: data,
+		Key:     []byte(matchID),
+		Value:   data,
+		Headers: traceHeaders(ctx),
 	})
 }
 
 // PublishTelemetry publishes telemetry events for analytics (FR-AN-01)
 func (p *Publisher) PublishTelemetry(ctx context.Context, matchID, playerID string, x, y float64, eventType string) error {
+	ctx, span := otel.Tracer("game-room-server").Start(ctx, "kafka.publish match.telemetry")
+	defer span.End()
+	span.SetAttributes(attribute.String("match.id", matchID), attribute.String("player.id", playerID), attribute.String("telemetry.type", eventType))
+
 	event := TelemetryEvent{
 		Type:     eventType,
 		MatchID:  matchID,
@@ -151,9 +173,10 @@ func (p *Publisher) PublishTelemetry(ctx context.Context, matchID, playerID stri
 	}
 
 	msg := kafka.Message{
-		Key:   []byte(matchID),
-		Value: data,
-		Time:  time.Now(),
+		Key:     []byte(matchID),
+		Value:   data,
+		Time:    time.Now(),
+		Headers: traceHeaders(ctx),
 	}
 
 	if err := p.telemetryWriter.WriteMessages(ctx, msg); err != nil {
@@ -162,6 +185,16 @@ func (p *Publisher) PublishTelemetry(ctx context.Context, matchID, playerID stri
 	}
 
 	return nil
+}
+
+func traceHeaders(ctx context.Context) []kafka.Header {
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	headers := make([]kafka.Header, 0, len(carrier))
+	for key, value := range carrier {
+		headers = append(headers, kafka.Header{Key: key, Value: []byte(value)})
+	}
+	return headers
 }
 
 // Close closes the Kafka writers

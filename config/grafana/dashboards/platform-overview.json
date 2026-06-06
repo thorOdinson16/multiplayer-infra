@@ -1,0 +1,43 @@
+{
+  "uid": "platform-overview",
+  "title": "Multiplayer Platform Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["multiplayer", "demo"],
+  "time": {"from": "now-30m", "to": "now"},
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Matchmaking Queue Length",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "targets": [{"expr": "matchmaking_queue_length", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "RabbitMQ Broker Unavailable",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "targets": [{"expr": "matchmaking_broker_unavailable", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Telemetry Events",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "targets": [{"expr": "telemetry_events_total", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "OTel Collector Exported Metrics",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "otelcol_exporter_sent_metric_points", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "OTel Collector Exported Spans",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [{"expr": "otelcol_exporter_sent_spans", "refId": "A"}]
+    }
+  ],
+  "templating": {"list": []},
+  "annotations": {"list": []}
+}

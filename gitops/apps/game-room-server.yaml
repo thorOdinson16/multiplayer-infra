@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: game-room-server
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/thorOdinson16/multiplayer-infra.git
+    targetRevision: HEAD
+    path: helm/game-room-server
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: game-platform
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -2,9 +2,12 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
+	"github.com/couchbase/gocb/v2"
+	"github.com/google/uuid"
 	"github.com/thorOdinson16/multiplayer-infra/services/auth-service/internal/jwt"
 	"github.com/thorOdinson16/multiplayer-infra/services/auth-service/internal/store"
 	"golang.org/x/crypto/bcrypt"
@@ -32,12 +35,24 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+// RegisterRequest represents the registration request body.
+type RegisterRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 // LoginResponse represents the login response
 type LoginResponse struct {
 	Token     string `json:"token"`
 	PlayerID  string `json:"playerId"`
 	Username  string `json:"username"`
 	ExpiresAt string `json:"expiresAt"`
+}
+
+// RegisterResponse represents the registration response.
+type RegisterResponse struct {
+	PlayerID string `json:"playerId"`
+	Username string `json:"username"`
 }
 
 // ErrorResponse represents an error response
@@ -50,6 +65,91 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)
+}
+
+// Register handles POST /auth/register.
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{
+			Error:   "method_not_allowed",
+			Message: "Only POST is allowed",
+		})
+		return
+	}
+
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "Invalid request body",
+		})
+		return
+	}
+
+	req.Username = strings.TrimSpace(req.Username)
+	if req.Username == "" || req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error:   "missing_fields",
+			Message: "Username and password are required",
+		})
+		return
+	}
+
+	if len(req.Password) < 8 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{
+			Error:   "weak_password",
+			Message: "Password must be at least 8 characters",
+		})
+		return
+	}
+
+	if _, err := h.store.GetPlayerByUsername(req.Username); err == nil {
+		writeJSON(w, http.StatusConflict, ErrorResponse{
+			Error:   "username_exists",
+			Message: "Username already exists",
+		})
+		return
+	} else if !errors.Is(err, gocb.ErrDocumentNotFound) {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{
+			Error:   "lookup_error",
+			Message: "Failed to check username",
+		})
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{
+			Error:   "hash_error",
+			Message: "Failed to hash password",
+		})
+		return
+	}
+
+	player := &store.Player{
+		PlayerID:     uuid.New().String(),
+		Username:     req.Username,
+		PasswordHash: string(hash),
+	}
+	if err := h.store.CreatePlayer(player); err != nil {
+		if errors.Is(err, gocb.ErrDocumentExists) {
+			writeJSON(w, http.StatusConflict, ErrorResponse{
+				Error:   "player_exists",
+				Message: "Player already exists",
+			})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{
+			Error:   "create_error",
+			Message: "Failed to create player",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, RegisterResponse{
+		PlayerID: player.PlayerID,
+		Username: player.Username,
+	})
 }
 
 // Login handles POST /auth/login (FR-AUTH-01)

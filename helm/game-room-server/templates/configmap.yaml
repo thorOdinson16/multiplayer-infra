@@ -12,6 +12,8 @@ data:
   COUCHBASE_USER: {{ .Values.couchbase.user }}
   MAX_PLAYERS: {{ .Values.maxPlayers | quote }}
   TICK_RATE: {{ .Values.tickRate | quote }}
+  MATCH_ID: {{ .Values.matchId | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.otel.endpoint | quote }}
   RAFT_CLUSTER_SIZE: {{ .Values.replicaCount | quote }}
   RAFT_SERVICE: "game-room-server-headless"
   RAFT_NAMESPACE: "game-platform"

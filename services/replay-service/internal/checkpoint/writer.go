@@ -13,20 +13,20 @@ import (
 
 // CheckpointRecord represents a replay checkpoint (§8.1)
 type CheckpointRecord struct {
-	Type           string          `json:"type"`
-	MatchID        string          `json:"matchId"`
-	Tick           uint64          `json:"tick"`
-	SnapshotState  json.RawMessage `json:"snapshotState"`
-	KafkaOffset    int64           `json:"kafkaOffset"`
-	CreatedAt      string          `json:"createdAt"`
+	Type          string          `json:"type"`
+	MatchID       string          `json:"matchId"`
+	Tick          uint64          `json:"tick"`
+	SnapshotState json.RawMessage `json:"snapshotState"`
+	KafkaOffset   int64           `json:"kafkaOffset"`
+	CreatedAt     string          `json:"createdAt"`
 }
 
 // Writer manages checkpoint persistence to Couchbase (FR-RP-03)
 type Writer struct {
-	cluster    *gocb.Cluster
-	coll       *gocb.Collection
-	mu         sync.Mutex
-	events     map[string][]*consumer.MatchEvent // matchID -> events
+	cluster *gocb.Cluster
+	coll    *gocb.Collection
+	mu      sync.Mutex
+	events  map[string][]*consumer.MatchEvent // matchID -> events
 }
 
 // NewWriter creates a new checkpoint writer
@@ -54,6 +54,16 @@ func (w *Writer) AppendEvent(event *consumer.MatchEvent) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.events[event.MatchID] = append(w.events[event.MatchID], event)
+}
+
+// DrainEvents returns and clears buffered events for a completed match.
+func (w *Writer) DrainEvents(matchID string) []*consumer.MatchEvent {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	events := w.events[matchID]
+	delete(w.events, matchID)
+	return append([]*consumer.MatchEvent(nil), events...)
 }
 
 // WriteCheckpoint persists a checkpoint every 300 ticks (FR-RP-03)

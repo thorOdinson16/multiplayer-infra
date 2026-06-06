@@ -36,12 +36,35 @@ func NewStateStore(addr, password string) (*StateStore, error) {
 // SaveState persists the current game state to Redis
 func (s *StateStore) SaveState(ctx context.Context, matchID string, state *game.GameState, ttl time.Duration) error {
 	key := fmt.Sprintf("match:%s:state", matchID)
-	data, err := json.Marshal(state)
+	playersKey := fmt.Sprintf("match:%s:players", matchID)
+	snapshot := state.GetSnapshot()
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
 	}
 
-	return s.client.Set(ctx, key, data, ttl).Err()
+	pipe := s.client.Pipeline()
+	pipe.Set(ctx, key, data, ttl)
+	if len(snapshot.Players) > 0 {
+		ids := make([]interface{}, 0, len(snapshot.Players))
+		for playerID := range snapshot.Players {
+			ids = append(ids, playerID)
+		}
+		pipe.SAdd(ctx, playersKey, ids...)
+		pipe.Expire(ctx, playersKey, ttl)
+	}
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+// AddPlayerToMatch records that a player belongs to a match for reconnect checks.
+func (s *StateStore) AddPlayerToMatch(ctx context.Context, matchID, playerID string, ttl time.Duration) error {
+	key := fmt.Sprintf("match:%s:players", matchID)
+	pipe := s.client.Pipeline()
+	pipe.SAdd(ctx, key, playerID)
+	pipe.Expire(ctx, key, ttl)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 // GetState retrieves game state from Redis

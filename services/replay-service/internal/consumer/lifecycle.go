@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // LifecycleEvent is a match start/end event from match.lifecycle topic
@@ -18,8 +21,8 @@ type LifecycleEvent struct {
 
 // LifecycleConsumer consumes match lifecycle events (FR-RP-07)
 type LifecycleConsumer struct {
-	reader   *kafka.Reader
-	onEnd    func(matchID string)
+	reader *kafka.Reader
+	onEnd  func(ctx context.Context, matchID string)
 }
 
 // NewLifecycleConsumer creates a new lifecycle consumer
@@ -39,7 +42,7 @@ func NewLifecycleConsumer(brokers []string) *LifecycleConsumer {
 }
 
 // SetMatchEndHandler sets the callback for match end events
-func (c *LifecycleConsumer) SetMatchEndHandler(handler func(matchID string)) {
+func (c *LifecycleConsumer) SetMatchEndHandler(handler func(ctx context.Context, matchID string)) {
 	c.onEnd = handler
 }
 
@@ -66,10 +69,22 @@ func (c *LifecycleConsumer) Start(ctx context.Context) {
 			}
 
 			if event.Type == "match_end" && c.onEnd != nil {
-				c.onEnd(event.MatchID)
+				msgCtx := extractLifecycleTraceContext(ctx, msg.Headers)
+				_, span := otel.Tracer("replay-service").Start(msgCtx, "kafka.consume match.lifecycle")
+				span.SetAttributes(attribute.String("match.id", event.MatchID), attribute.String("match.lifecycle", event.Type))
+				c.onEnd(msgCtx, event.MatchID)
+				span.End()
 			}
 		}
 	}()
+}
+
+func extractLifecycleTraceContext(ctx context.Context, headers []kafka.Header) context.Context {
+	carrier := propagation.MapCarrier{}
+	for _, header := range headers {
+		carrier.Set(header.Key, string(header.Value))
+	}
+	return otel.GetTextMapPropagator().Extract(ctx, carrier)
 }
 
 // Close closes the consumer

@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/thorOdinson16/multiplayer-infra/services/game-room-server/internal/game"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 var upgrader = websocket.Upgrader{
@@ -19,17 +22,19 @@ var upgrader = websocket.Upgrader{
 }
 
 type Handler struct {
-	mu          sync.RWMutex
-	game        *game.GameState
-	onInput     func(event *game.InputEvent)
-	broadcaster *game.Broadcaster
+	mu                sync.RWMutex
+	game              *game.GameState
+	onInput           func(event *game.InputEvent)
+	broadcaster       *game.Broadcaster
+	onPlayerConnected func(playerID string)
 }
 
-func NewHandler(gs *game.GameState, onInput func(event *game.InputEvent), broadcaster *game.Broadcaster) *Handler {
+func NewHandler(gs *game.GameState, onInput func(event *game.InputEvent), broadcaster *game.Broadcaster, onPlayerConnected func(playerID string)) *Handler {
 	return &Handler{
-		game:        gs,
-		onInput:     onInput,
-		broadcaster: broadcaster,
+		game:              gs,
+		onInput:           onInput,
+		broadcaster:       broadcaster,
+		onPlayerConnected: onPlayerConnected,
 	}
 }
 
@@ -49,6 +54,9 @@ func (h *Handler) HandleConnection(w http.ResponseWriter, r *http.Request, playe
 	h.mu.Lock()
 	h.game.AddPlayer(playerID, username)
 	h.mu.Unlock()
+	if h.onPlayerConnected != nil {
+		h.onPlayerConnected(playerID)
+	}
 
 	// CRITICAL FIX: Send initial state immediately to prevent client timeout
 	initialState := h.game.GetSnapshot()
@@ -95,10 +103,14 @@ func (h *Handler) readLoop(conn *websocket.Conn, playerID string) {
 		}
 
 		event.PlayerID = playerID
+		ctx, span := otel.Tracer("game-room-server").Start(context.Background(), "game.input")
+		span.SetAttributes(attribute.String("player.id", playerID), attribute.String("input.type", event.Type))
+		event.Ctx = ctx
 
 		if h.onInput != nil {
 			h.onInput(&event)
 		}
+		span.End()
 	}
 }
 
