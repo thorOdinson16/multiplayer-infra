@@ -132,10 +132,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set lowercase repo owner
+        run: echo "REPO_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
       - uses: docker/build-push-action@v6
         with:
           context: services/${{ matrix.service }}
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: |
-            ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest
+            ghcr.io/${{ env.REPO_LC }}/multiplayer-infra/${{ matrix.service }}:${{ github.sha }}
+            ghcr.io/${{ env.REPO_LC }}/multiplayer-infra/${{ matrix.service }}:latest
