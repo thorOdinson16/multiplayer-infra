@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: rabbitmq-config
-  namespace: infra
+  namespace: {{ .Release.Namespace }}
   labels:
     app: rabbitmq
 data:

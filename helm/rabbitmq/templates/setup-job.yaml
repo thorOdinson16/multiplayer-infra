@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: rabbitmq-setup
-  namespace: infra
+  namespace: {{ .Release.Namespace }}
   labels:
     app: rabbitmq
   annotations:

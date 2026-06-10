@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: replay-service
-  namespace: game-platform
+  namespace: {{ .Release.Namespace }}
   labels:
     app: replay-service
 spec:
