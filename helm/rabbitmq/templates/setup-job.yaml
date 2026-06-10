@@ -19,8 +19,9 @@ spec:
             - /bin/sh
             - -c
             - |
-              until wget -q -O- http://rabbitmq.infra.svc.cluster.local:15672 > /dev/null 2>&1; do
-                echo "Waiting for RabbitMQ..."
+              RMQ_HOST="rabbitmq.{{ .Release.Namespace }}.svc.cluster.local"
+              until wget -q -O- "http://${RMQ_HOST}:15672" > /dev/null 2>&1; do
+                echo "Waiting for RabbitMQ at ${RMQ_HOST}..."
                 sleep 5
               done
               echo "RabbitMQ is ready"
@@ -45,8 +46,9 @@ spec:
               set -e
               
               # Wait for management API to actually be ready (not just port open)
-              for i in $(seq 1 30); do
-                if rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS list queues > /dev/null 2>&1; then
+               RMQ_HOST="rabbitmq.{{ .Release.Namespace }}.svc.cluster.local"
+               for i in $(seq 1 30); do
+                 if rabbitmqadmin -H $RMQ_HOST -P 15672 -u $RMQ_USER -p $RMQ_PASS list queues > /dev/null 2>&1; then
                   echo "RabbitMQ management API is ready"
                   break
                 fi
@@ -55,21 +57,21 @@ spec:
               done
               
               # Create deadletter exchange (fanout)
-              rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare exchange \
-                name=deadletter.exchange type=fanout durable=true
+               rabbitmqadmin -H $RMQ_HOST -P 15672 -u $RMQ_USER -p $RMQ_PASS declare exchange \
+                 name=deadletter.exchange type=fanout durable=true
               
               # Create matchmaking requests queue with dead-letter
-              rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare queue \
-                name=matchmaking.requests durable=true \
-                arguments='{"x-dead-letter-exchange":"deadletter.exchange"}'
+               rabbitmqadmin -H $RMQ_HOST -P 15672 -u $RMQ_USER -p $RMQ_PASS declare queue \
+                 name=matchmaking.requests durable=true \
+                 arguments='{"x-dead-letter-exchange":"deadletter.exchange"}'
               
               # Create matchmaking expired queue (dead-letter destination)
-              rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare queue \
-                name=matchmaking.expired durable=true
+               rabbitmqadmin -H $RMQ_HOST -P 15672 -u $RMQ_USER -p $RMQ_PASS declare queue \
+                 name=matchmaking.expired durable=true
               
               # Bind expired queue to deadletter exchange
-              rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare binding \
-                source=deadletter.exchange destination=matchmaking.expired
+               rabbitmqadmin -H $RMQ_HOST -P 15672 -u $RMQ_USER -p $RMQ_PASS declare binding \
+                 source=deadletter.exchange destination=matchmaking.expired
               
               # Create notifications exchange (topic)
               rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare exchange \
@@ -77,10 +79,10 @@ spec:
               
               # Create notification queues and bind them
               for event in match.found match.ended match.expired player.joined system.alert; do
-                rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare queue \
-                  name=notifications.$event durable=true
-                rabbitmqadmin -u $RMQ_USER -p $RMQ_PASS declare binding \
-                  source=notifications.exchange destination=notifications.$event routing_key=$event
+                 rabbitmqadmin -H $RMQ_HOST -P 15672 -u $RMQ_USER -p $RMQ_PASS declare queue \
+                   name=notifications.$event durable=true
+                 rabbitmqadmin -H $RMQ_HOST -P 15672 -u $RMQ_USER -p $RMQ_PASS declare binding \
+                   source=notifications.exchange destination=notifications.$event routing_key=$event
               done
               
               echo "RabbitMQ setup complete"

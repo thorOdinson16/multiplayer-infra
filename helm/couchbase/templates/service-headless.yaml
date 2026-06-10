@@ -1,12 +1,12 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: couchbase
+  name: couchbase-headless
   namespace: {{ .Release.Namespace }}
   labels:
     app: couchbase
 spec:
-  type: {{ .Values.service.type }}
+  clusterIP: None
   ports:
     - name: admin
       port: {{ .Values.service.adminPort }}

@@ -27,6 +27,9 @@ service:
   kvPort: 11210
   type: ClusterIP
 
+# When true create a headless service for StatefulSet DNS discovery
+headless: true
+
 buckets:
   - name: players
     type: couchbase

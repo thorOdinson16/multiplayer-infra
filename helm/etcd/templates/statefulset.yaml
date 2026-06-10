@@ -28,7 +28,12 @@ spec:
             - --advertise-client-urls=http://$(POD_NAME).etcd.{{ .Release.Namespace }}.svc.cluster.local:2379
             - --listen-peer-urls=http://0.0.0.0:2380
             - --initial-advertise-peer-urls=http://$(POD_NAME).etcd.{{ .Release.Namespace }}.svc.cluster.local:2380
-            - --initial-cluster=$(POD_NAME)=http://$(POD_NAME).etcd.{{ .Release.Namespace }}.svc.cluster.local:2380
+            {{- /* build initial-cluster list based on replicaCount */}}
+            {{- $parts := list }}
+            {{- range $i := until .Values.replicaCount }}
+            {{- $parts = append $parts (printf "etcd-%d=http://etcd-%d.etcd.%s.svc.cluster.local:2380" $i $i .Release.Namespace) }}
+            {{- end }}
+            - --initial-cluster={{ join $parts "," }}
             - --initial-cluster-state=new
             - --initial-cluster-token=multiplayer-infra-etcd
           ports:
