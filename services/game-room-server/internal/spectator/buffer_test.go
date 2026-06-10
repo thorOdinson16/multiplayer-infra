@@ -12,7 +12,11 @@ func TestRingBufferEnqueueAndGet(t *testing.T) {
 	gs := game.NewGameState("m1", 4)
 	gs.AddPlayer("p1", "alice")
 	rb.Enqueue(1, gs)
-	time.Sleep(10 * time.Millisecond)
+	// Advance time a bit and write a few more snapshots to fill buffer
+	for i := 0; i < 5; i++ {
+		rb.Enqueue(uint64(i+2), gs)
+	}
+	time.Sleep(20 * time.Millisecond)
 	snap := rb.GetSnapshot()
 	if snap == nil {
 		t.Fatalf("expected snapshot, got nil")

@@ -2,6 +2,7 @@ package raft
 
 import (
 	"encoding/json"
+	"io"
 	"testing"
 	"time"
 
@@ -46,7 +47,18 @@ func TestFSMRestorePreservesPointer(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 }
 
-type fakeReadCloser struct{ data []byte }
+type fakeReadCloser struct {
+	data []byte
+	off  int
+}
 
-func (f *fakeReadCloser) Read(p []byte) (int, error) { copy(p, f.data); return len(f.data), nil }
-func (f *fakeReadCloser) Close() error               { return nil }
+func (f *fakeReadCloser) Read(p []byte) (int, error) {
+	if f.off >= len(f.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, f.data[f.off:])
+	f.off += n
+	return n, nil
+}
+
+func (f *fakeReadCloser) Close() error { return nil }
