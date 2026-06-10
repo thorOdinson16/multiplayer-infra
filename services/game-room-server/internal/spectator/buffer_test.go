@@ -16,7 +16,8 @@ func TestRingBufferEnqueueAndGet(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		rb.Enqueue(uint64(i+2), gs)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// Wait longer than the buffer delay so GetSnapshot can find an older snapshot
+	time.Sleep(1200 * time.Millisecond)
 	snap := rb.GetSnapshot()
 	if snap == nil {
 		t.Fatalf("expected snapshot, got nil")
