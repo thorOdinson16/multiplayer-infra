@@ -104,7 +104,7 @@ func (s *CouchbaseStore) CreatePlayer(player *Player) error {
 	// Create a username -> playerID mapping document to enforce uniqueness.
 	// Key format: username::<username>
 	mappingKey := "username::" + player.Username
-    _, err := s.playerColl.Insert(mappingKey, map[string]string{"playerId": player.PlayerID}, nil)
+	_, err := s.playerColl.Insert(mappingKey, map[string]string{"playerId": player.PlayerID}, nil)
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func (s *CouchbaseStore) CreatePlayer(player *Player) error {
 	_, err = s.playerColl.Insert(player.PlayerID, player, nil)
 	if err != nil {
 		// Best-effort cleanup of mapping
-        _ = s.playerColl.Remove(mappingKey, nil)
+		_, _ = s.playerColl.Remove(mappingKey, nil)
 		return err
 	}
 	return nil
