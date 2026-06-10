@@ -108,31 +108,77 @@ func (c *RabbitMQConsumer) PublishRequest(msg MatchmakingMessage) error {
 
 // Start begins consuming messages from the queue
 func (c *RabbitMQConsumer) Start() error {
-	msgs, err := c.channel.Consume(
-		c.queue,
-		"",
-		false,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to start consuming: %w", err)
-	}
+	// Start a single goroutine that manages consumption and reconnection.
+	go c.consumeLoop()
+	return nil
+}
 
-	log.Printf("Consuming from queue: %s", c.queue)
+func (c *RabbitMQConsumer) consumeLoop() {
+	for {
+		c.mu.RLock()
+		ch := c.channel
+		q := c.queue
+		c.mu.RUnlock()
 
-	go func() {
+		if ch == nil {
+			// Try to reconnect
+			conn, err := amqp091.Dial(c.uri)
+			if err != nil {
+				c.setBrokerAvailable(false)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			channel, err := conn.Channel()
+			if err != nil {
+				conn.Close()
+				c.setBrokerAvailable(false)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			c.mu.Lock()
+			if c.conn != nil {
+				// close stale
+				c.conn.Close()
+			}
+			c.conn = conn
+			c.channel = channel
+			c.brokerAvailable = true
+			ch = channel
+			c.mu.Unlock()
+		}
+
+		msgs, err := ch.Consume(q, "", false, false, false, false, nil)
+		if err != nil {
+			c.setBrokerAvailable(false)
+			time.Sleep(2 * time.Second)
+			c.mu.Lock()
+			if c.channel != nil {
+				c.channel.Close()
+			}
+			c.channel = nil
+			c.mu.Unlock()
+			continue
+		}
+
+		log.Printf("Consuming from queue: %s", q)
 		for msg := range msgs {
 			c.handleMessage(msg)
 		}
+
+		// If we get here, msgs channel closed - mark broker unavailable and retry
 		c.setBrokerAvailable(false)
-	}()
-
-	go c.monitorBroker()
-
-	return nil
+		c.mu.Lock()
+		if c.channel != nil {
+			c.channel.Close()
+			c.channel = nil
+		}
+		if c.conn != nil {
+			c.conn.Close()
+			c.conn = nil
+		}
+		c.mu.Unlock()
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func (c *RabbitMQConsumer) handleMessage(msg amqp091.Delivery) {

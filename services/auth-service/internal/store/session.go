@@ -101,8 +101,22 @@ func (s *CouchbaseStore) CreatePlayer(player *Player) error {
 	player.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	player.LastSeen = player.CreatedAt
 
-	_, err := s.playerColl.Insert(player.PlayerID, player, nil)
-	return err
+	// Create a username -> playerID mapping document to enforce uniqueness.
+	// Key format: username::<username>
+	mappingKey := "username::" + player.Username
+	_, err := s.playerColl.Scope().Collection("_default").Insert(mappingKey, map[string]string{"playerId": player.PlayerID}, nil)
+	if err != nil {
+		return err
+	}
+
+	// Insert player document using the playerID key. If this fails, attempt to remove the mapping.
+	_, err = s.playerColl.Insert(player.PlayerID, player, nil)
+	if err != nil {
+		// Best-effort cleanup of mapping
+		_ = s.playerColl.Scope().Collection("_default").Remove(mappingKey, nil)
+		return err
+	}
+	return nil
 }
 
 // CreateSession stores a session document with TTL matching JWT expiry

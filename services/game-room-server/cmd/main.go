@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -104,6 +105,7 @@ func main() {
 	// Track last activity time for empty room detection
 	var emptyRoomTimer *time.Timer
 	var emptyRoomTimerActive bool
+	var tickMu sync.Mutex
 
 	// Define room empty handler - finishes the room when no players
 	roomEmptyHandler := func() {
@@ -156,6 +158,8 @@ func main() {
 
 	// Function to stop tick loop if running
 	stopTickLoop := func() {
+		tickMu.Lock()
+		defer tickMu.Unlock()
 		if tickLoopRunning && tickLoop != nil {
 			log.Printf("Stopping tick loop")
 			tickLoop.Stop()
@@ -165,7 +169,9 @@ func main() {
 
 	// Function to start tick loop if not running and there are players
 	startTickLoopIfNeeded := func() {
-		if !tickLoopRunning && gameState.GetConnectedPlayerCount() > 0 && gameState.GetStatus() == "running" {
+		tickMu.Lock()
+		shouldStart := !tickLoopRunning && gameState.GetConnectedPlayerCount() > 0 && gameState.GetStatus() == "running"
+		if shouldStart {
 			log.Printf("Starting tick loop - players connected")
 			tickLoop = game.NewTickLoop(gameState, tickRate, func(tick uint64, state *game.GameState) {
 				// Check if match should finish (duration reached)
@@ -178,6 +184,7 @@ func main() {
 
 				// Check for empty room
 				if state.GetConnectedPlayerCount() == 0 {
+					tickMu.Lock()
 					if !emptyRoomTimerActive {
 						emptyRoomTimerActive = true
 						emptyRoomTimer = time.AfterFunc(30*time.Second, func() {
@@ -188,17 +195,22 @@ func main() {
 									log.Printf("Warning: Failed to publish match end: %v", err)
 								}
 							}
+							tickMu.Unlock() // unlock before calling stopTickLoop which will re-lock
 							stopTickLoop()
+							return
 						})
 					}
+					tickMu.Unlock()
 					return
 				}
 
 				// Reset empty room timer if we have players
+				tickMu.Lock()
 				if emptyRoomTimerActive {
 					emptyRoomTimer.Stop()
 					emptyRoomTimerActive = false
 				}
+				tickMu.Unlock()
 
 				// Broadcast state to players (FR-GR-04)
 				broadcaster.BroadcastToPlayers(state)
@@ -240,6 +252,7 @@ func main() {
 			tickLoop.Start()
 			tickLoopRunning = true
 		}
+		tickMu.Unlock()
 	}
 
 	// Start tick loop initially if there are players
@@ -292,13 +305,16 @@ func main() {
 	// Match status endpoint - allows checking if room is finished
 	mux.HandleFunc("/match/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		tickMu.Lock()
+		tlr := tickLoopRunning
+		tickMu.Unlock()
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"matchId":         matchID,
 			"status":          gameState.GetStatus(),
 			"playerCount":     gameState.GetConnectedPlayerCount(),
 			"totalPlayers":    len(gameState.GetSnapshot().Players),
 			"tick":            gameState.Tick,
-			"tickLoopRunning": tickLoopRunning,
+			"tickLoopRunning": tlr,
 		})
 	})
 
@@ -317,15 +333,18 @@ func main() {
 	})
 	mux.HandleFunc("/stats", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		tickMu.Lock()
+		tlr := tickLoopRunning
+		tickMu.Unlock()
 		w.Write([]byte(`{
-			"matchId": "` + matchID + `",
-			"nodeId": "` + nodeID + `",
-			"isLeader": ` + strconv.FormatBool(raftNode.IsLeader()) + `,
-			"playerCount": ` + strconv.Itoa(broadcaster.PlayerCount()) + `,
-			"tickRate": ` + strconv.Itoa(tickRate) + `,
-			"status": "` + gameState.GetStatus() + `",
-			"tickLoopRunning": ` + strconv.FormatBool(tickLoopRunning) + `
-		}`))
+            "matchId": "` + matchID + `",
+            "nodeId": "` + nodeID + `",
+            "isLeader": ` + strconv.FormatBool(raftNode.IsLeader()) + `,
+            "playerCount": ` + strconv.Itoa(broadcaster.PlayerCount()) + `,
+            "tickRate": ` + strconv.Itoa(tickRate) + `,
+            "status": "` + gameState.GetStatus() + `",
+            "tickLoopRunning": ` + strconv.FormatBool(tlr) + `
+        }`))
 	})
 
 	server := &http.Server{

@@ -118,12 +118,27 @@ func (b *Broadcaster) BroadcastToSpectators(state *GameState) {
 
 // BroadcastSpectatorPayload sends an already delayed payload to connected spectators.
 func (b *Broadcaster) BroadcastSpectatorPayload(data []byte) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
+	// Write to all spectators. Collect failed connections and close them outside
+	// the critical section to avoid blocking other operations while performing
+	// network IO under lock.
+	b.mu.RLock()
+	toClose := make([]string, 0)
 	for spectatorID, conn := range b.spectators {
 		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 			log.Printf("Failed to send to spectator %s: %v", spectatorID, err)
+			toClose = append(toClose, spectatorID)
+		}
+	}
+	b.mu.RUnlock()
+
+	if len(toClose) == 0 {
+		return
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, spectatorID := range toClose {
+		if conn, ok := b.spectators[spectatorID]; ok {
 			conn.Close()
 			delete(b.spectators, spectatorID)
 		}

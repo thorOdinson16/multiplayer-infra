@@ -31,5 +31,10 @@ func (m *Metrics) RecordEvent(event *TelemetryEvent) {
 	}
 }
 
-func (m *Metrics) Lock()    { m.mu.RLock() }
-func (m *Metrics) Unlock()  { m.mu.RUnlock() }
+// Lock/Unlock expose the write lock semantics for callers that need exclusive access.
+func (m *Metrics) Lock()   { m.mu.Lock() }
+func (m *Metrics) Unlock() { m.mu.Unlock() }
+
+// RLock/RUnlock expose read-lock semantics when callers only need shared access.
+func (m *Metrics) RLock()   { m.mu.RLock() }
+func (m *Metrics) RUnlock() { m.mu.RUnlock() }

@@ -21,10 +21,21 @@ type RingBuffer struct {
 }
 
 // TickSnapshot is a timestamped game state snapshot
+type SpectatorState struct {
+	MatchID    string                      `json:"matchId"`
+	Tick       uint64                      `json:"tick"`
+	Players    map[string]game.PlayerState `json:"players"`
+	StartTime  time.Time                   `json:"startTime"`
+	MaxPlayers int                         `json:"maxPlayers"`
+	Status     string                      `json:"status"`
+	Duration   int                         `json:"duration"`
+}
+
+// TickSnapshot is a timestamped lightweight game state snapshot for spectators
 type TickSnapshot struct {
 	Tick      uint64          `json:"tick"`
 	Timestamp time.Time       `json:"timestamp"`
-	State     *game.GameState `json:"state"`
+	State     *SpectatorState `json:"state"`
 }
 
 // NewRingBuffer creates a new ring buffer
@@ -44,10 +55,25 @@ func (rb *RingBuffer) Enqueue(tick uint64, state *game.GameState) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
+	// Build a lightweight spectator view to avoid copying sync.RWMutex and other runtime state.
+	gs := state.GetSnapshot()
+	sp := &SpectatorState{
+		MatchID:    gs.MatchID,
+		Tick:       gs.Tick,
+		Players:    make(map[string]game.PlayerState, len(gs.Players)),
+		StartTime:  gs.StartTime,
+		MaxPlayers: gs.MaxPlayers,
+		Status:     gs.Status,
+		Duration:   gs.Duration,
+	}
+	for id, p := range gs.Players {
+		sp.Players[id] = *p
+	}
+
 	snapshot := &TickSnapshot{
 		Tick:      tick,
 		Timestamp: time.Now(),
-		State:     state.GetSnapshot(),
+		State:     sp,
 	}
 
 	rb.buffer[rb.head] = snapshot

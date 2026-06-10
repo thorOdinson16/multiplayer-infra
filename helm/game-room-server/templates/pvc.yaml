@@ -1,9 +1,9 @@
-{{- if eq (int .Values.replicaCount) 1 }}
+{{- if and (eq (int .Values.replicaCount) 1) .Values.persistence.createStandalonePvc }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: game-room-server-data
-  namespace: game-platform
+  namespace: {{ .Release.Namespace }}
 spec:
   accessModes:
     - ReadWriteOnce

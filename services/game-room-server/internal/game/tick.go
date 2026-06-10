@@ -38,7 +38,7 @@ func (tl *TickLoop) Start() {
 		log.Println("Tick loop already running")
 		return
 	}
-	
+
 	interval := time.Second / time.Duration(tl.tickRate)
 	ticker := time.NewTicker(interval)
 	tl.running = true
@@ -56,7 +56,7 @@ func (tl *TickLoop) Start() {
 					tl.running = false
 					return
 				}
-				
+
 				tick := tl.state.IncrementTick()
 				if tl.onTick != nil {
 					tl.onTick(tick, tl.state)

@@ -25,8 +25,8 @@ type GameState struct {
 	Players    map[string]*PlayerState `json:"players"`
 	StartTime  time.Time               `json:"startTime"`
 	MaxPlayers int                     `json:"maxPlayers"`
-	Status     string                  `json:"status"`    // "waiting", "running", "finished"
-	Duration   int                     `json:"duration"`  // Match duration in seconds (default 300 = 5 minutes)
+	Status     string                  `json:"status"`   // "waiting", "running", "finished"
+	Duration   int                     `json:"duration"` // Match duration in seconds (default 300 = 5 minutes)
 }
 
 // NewGameState creates a new game state
@@ -196,4 +196,27 @@ func clamp(val, min, max float64) float64 {
 		return max
 	}
 	return val
+}
+
+// ReplaceWith replaces the contents of the receiver with the provided restored
+// state while preserving the receiver's identity (and its mutex). This is
+// intended for use during FSM Restore where other components hold pointers to
+// the original GameState instance.
+func (gs *GameState) ReplaceWith(restored *GameState) {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+
+	gs.MatchID = restored.MatchID
+	gs.Tick = restored.Tick
+	gs.StartTime = restored.StartTime
+	gs.MaxPlayers = restored.MaxPlayers
+	gs.Status = restored.Status
+	gs.Duration = restored.Duration
+
+	// Replace players map with a deep copy of restored players
+	gs.Players = make(map[string]*PlayerState, len(restored.Players))
+	for id, p := range restored.Players {
+		pc := *p
+		gs.Players[id] = &pc
+	}
 }

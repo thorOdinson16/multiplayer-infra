@@ -8,11 +8,17 @@ image:
 couchbase:
   host: couchbase.infra.svc.cluster.local
   user: admin
-  password: "password"
+  # The couchbase password must be provided via Kubernetes Secret referenced by .Values.secrets.name
+  password: ""
 
 jwt:
-  secret: "change-me-local-dev-jwt-secret-32-bytes"
+  # Do NOT store secrets in values.yaml. Provide the JWT secret in a Kubernetes Secret and set .Values.secrets.name accordingly.
+  secret: ""
   expiryHours: 24
+
+# Secrets configuration: the chart will reference an existing Kubernetes Secret with this name.
+secrets:
+  name: auth-service-secrets
 
 resources:
   requests:

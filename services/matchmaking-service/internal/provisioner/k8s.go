@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +68,12 @@ func (p *K8sProvisioner) CreateGameRoom(matchID string, playerIDs []string) erro
 		return fmt.Errorf("failed to create headless service: %w", err)
 	}
 
+	// Image to use for game room pods. Can be provided via GAME_ROOM_IMAGE env var.
+	image := os.Getenv("GAME_ROOM_IMAGE")
+	if image == "" {
+		image = "game-room-server:latest"
+	}
+
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      statefulSetName,
@@ -88,7 +95,7 @@ func (p *K8sProvisioner) CreateGameRoom(matchID string, playerIDs []string) erro
 					Containers: []corev1.Container{
 						{
 							Name:  "game-room-server",
-							Image: "game-room-server:latest",
+							Image: image,
 							Ports: []corev1.ContainerPort{
 								{Name: "http", ContainerPort: 8080},
 								{Name: "raft", ContainerPort: 7000},

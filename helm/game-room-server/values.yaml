@@ -41,3 +41,5 @@ service:
 persistence:
   size: 5Gi
   storageClass: "standard"
+  # When true, create a standalone PVC for single-replica development installs.
+  createStandalonePvc: false

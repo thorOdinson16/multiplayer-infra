@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: etcd
-  namespace: infra
+  namespace: {{ .Release.Namespace }}
   labels:
     app: etcd
 spec:
@@ -22,13 +22,13 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - etcd
-            - --name=etcd-0
+            - --name=$(POD_NAME)
             - --data-dir=/var/lib/etcd
             - --listen-client-urls=http://0.0.0.0:2379
-            - --advertise-client-urls=http://etcd-0.etcd.infra.svc.cluster.local:2379
+            - --advertise-client-urls=http://$(POD_NAME).etcd.{{ .Release.Namespace }}.svc.cluster.local:2379
             - --listen-peer-urls=http://0.0.0.0:2380
-            - --initial-advertise-peer-urls=http://etcd-0.etcd.infra.svc.cluster.local:2380
-            - --initial-cluster=etcd-0=http://etcd-0.etcd.infra.svc.cluster.local:2380
+            - --initial-advertise-peer-urls=http://$(POD_NAME).etcd.{{ .Release.Namespace }}.svc.cluster.local:2380
+            - --initial-cluster=$(POD_NAME)=http://$(POD_NAME).etcd.{{ .Release.Namespace }}.svc.cluster.local:2380
             - --initial-cluster-state=new
             - --initial-cluster-token=multiplayer-infra-etcd
           ports:
@@ -36,6 +36,11 @@ spec:
               containerPort: {{ .Values.service.clientPort }}
             - name: peer
               containerPort: {{ .Values.service.peerPort }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

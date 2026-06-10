@@ -10,13 +10,13 @@ import (
 )
 
 type TelemetryEvent struct {
-	Type       string  `json:"type"`
-	MatchID    string  `json:"matchId"`
-	PlayerID   string  `json:"playerId"`
-	X          float64 `json:"x"`
-	Y          float64 `json:"y"`
-	Duration   float64 `json:"duration"`
-	Time       string  `json:"time"`
+	Type     string  `json:"type"`
+	MatchID  string  `json:"matchId"`
+	PlayerID string  `json:"playerId"`
+	X        float64 `json:"x"`
+	Y        float64 `json:"y"`
+	Duration float64 `json:"duration"`
+	Time     string  `json:"time"`
 }
 
 type TelemetryConsumer struct {
@@ -41,7 +41,9 @@ func (c *TelemetryConsumer) Start(ctx context.Context) {
 		for {
 			msg, err := c.reader.ReadMessage(ctx)
 			if err != nil {
-				if ctx.Err() != nil { return }
+				if ctx.Err() != nil {
+					return
+				}
 				time.Sleep(time.Second)
 				continue
 			}

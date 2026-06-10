@@ -55,7 +55,7 @@ func (c *LifecycleConsumer) Start(ctx context.Context) {
 					Scores map[string]int `json:"scores"`
 				} `json:"outcome"`
 			}
-			
+
 			if err := json.Unmarshal(msg.Value, &event); err != nil {
 				log.Printf("Failed to unmarshal event: %v", err)
 				continue
@@ -63,13 +63,13 @@ func (c *LifecycleConsumer) Start(ctx context.Context) {
 
 			if event.Type == "match_end" {
 				log.Printf("Match ended: %s, winner: %s", event.MatchID, event.Outcome.Winner)
-				
+
 				// Extract players from scores map
 				var players []string
 				for playerID := range event.Outcome.Scores {
 					players = append(players, playerID)
 				}
-				
+
 				// Update player stats
 				outcome := &store.MatchOutcome{
 					MatchID: event.MatchID,
@@ -78,7 +78,7 @@ func (c *LifecycleConsumer) Start(ctx context.Context) {
 					Scores:  event.Outcome.Scores,
 					EndedAt: time.Now().UTC().Format(time.RFC3339),
 				}
-				
+
 				if err := c.store.UpdatePlayerStats(outcome); err != nil {
 					log.Printf("Failed to update player stats: %v", err)
 				} else {

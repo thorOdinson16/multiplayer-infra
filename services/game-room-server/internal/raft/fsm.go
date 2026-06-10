@@ -60,6 +60,7 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 // Restore restores the FSM from a snapshot
 func (f *FSM) Restore(rc io.ReadCloser) error {
 	f.mu.Lock()
+	// Protect restoring the state while we read and merge the restored snapshot.
 	defer f.mu.Unlock()
 
 	data, err := io.ReadAll(rc)
@@ -72,8 +73,16 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 		return err
 	}
 
-	// Restore into existing state
-	f.state = &restoredState
+	// Merge restoredState into the existing GameState object so other components
+	// holding a pointer to f.state see the updated contents.
+	if f.state == nil {
+		// If for some reason we don't have an existing state pointer, adopt the restored one.
+		f.state = &restoredState
+		return nil
+	}
+
+	// Use GameState's helper to replace fields under its own lock.
+	f.state.ReplaceWith(&restoredState)
 	return nil
 }
 

@@ -109,11 +109,13 @@ func (w *Writer) GetCheckpoint(matchID string, tick uint64) (*CheckpointRecord, 
 	}
 
 	// Try the most recent checkpoint
-	query := fmt.Sprintf(
-		"SELECT r.* FROM replays r WHERE r.type = 'replay_checkpoint' AND r.matchId = '%s' AND r.tick <= %d ORDER BY r.tick DESC LIMIT 1",
-		matchID, tick,
-	)
-	rows, err := w.cluster.Query(query, nil)
+	query := "SELECT r.* FROM replays r WHERE r.type = 'replay_checkpoint' AND r.matchId = $matchId AND r.tick <= $tick ORDER BY r.tick DESC LIMIT 1"
+	rows, err := w.cluster.Query(query, &gocb.QueryOptions{
+		NamedParameters: map[string]interface{}{
+			"matchId": matchID,
+			"tick":    tick,
+		},
+	})
 	if err != nil {
 		return nil, err
 	}

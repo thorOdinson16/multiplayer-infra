@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -228,15 +229,22 @@ func (rn *RaftNode) desiredPeers(cfg Config) ([]raft.Server, error) {
 }
 
 func parseNodeOrdinal(nodeID string) (string, int, error) {
-	idx := strings.LastIndex(nodeID, "-")
-	if idx < 0 || idx == len(nodeID)-1 {
+	// Match a trailing dash followed by digits as the ordinal, e.g. "game-room-123-0" -> base "game-room-123", ordinal 0
+	re := regexp.MustCompile(`-(\d+)$`)
+	matches := re.FindStringSubmatch(nodeID)
+	if len(matches) != 2 {
 		return "", 0, fmt.Errorf("cannot parse ordinal from node ID: %s", nodeID)
 	}
-	ordinal, err := strconv.Atoi(nodeID[idx+1:])
+	ordinalStr := matches[1]
+	ordinal, err := strconv.Atoi(ordinalStr)
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid ordinal in node ID: %s", nodeID)
 	}
-	return nodeID[:idx], ordinal, nil
+	base := strings.TrimSuffix(nodeID, "-"+ordinalStr)
+	if base == "" {
+		return "", 0, fmt.Errorf("cannot parse base from node ID: %s", nodeID)
+	}
+	return base, ordinal, nil
 }
 
 func (rn *RaftNode) addConfiguredVoters(cfg Config) {

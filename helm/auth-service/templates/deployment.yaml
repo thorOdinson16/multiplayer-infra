@@ -28,12 +28,12 @@ spec:
             - name: COUCHBASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: auth-service-secrets
+                  name: {{ .Values.secrets.name }}
                   key: couchbase-password
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: auth-service-secrets
+                  name: {{ .Values.secrets.name }}
                   key: jwt-secret
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

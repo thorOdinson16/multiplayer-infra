@@ -19,6 +19,7 @@ type Publisher struct {
 	eventsWriter    *kafka.Writer
 	lifecycleWriter *kafka.Writer
 	telemetryWriter *kafka.Writer // ADDED for telemetry
+	telemetryCh     chan kafka.Message
 }
 
 // MatchEvent represents a game tick event for Kafka
@@ -49,7 +50,7 @@ type TelemetryEvent struct {
 
 // NewPublisher creates a new Kafka publisher
 func NewPublisher(brokers []string) *Publisher {
-	return &Publisher{
+	p := &Publisher{
 		eventsWriter: &kafka.Writer{
 			Addr:         kafka.TCP(brokers...),
 			Topic:        "match.events",
@@ -67,7 +68,13 @@ func NewPublisher(brokers []string) *Publisher {
 			Topic:    "match.telemetry",
 			Balancer: &kafka.Hash{},
 		},
+		telemetryCh: make(chan kafka.Message, 1024),
 	}
+
+	// Start telemetry batching loop
+	go p.telemetryLoop()
+
+	return p
 }
 
 // PublishTickEvent publishes a game tick to match.events (FR-GR-05)
@@ -179,12 +186,46 @@ func (p *Publisher) PublishTelemetry(ctx context.Context, matchID, playerID stri
 		Headers: traceHeaders(ctx),
 	}
 
-	if err := p.telemetryWriter.WriteMessages(ctx, msg); err != nil {
-		log.Printf("Failed to publish telemetry event: %v", err)
-		return err
+	// Enqueue for background batching. Don't block the tick loop; drop if buffer full.
+	select {
+	case p.telemetryCh <- msg:
+		return nil
+	default:
+		// Buffer full - drop telemetry to avoid blocking game loop.
+		log.Printf("Telemetry buffer full - dropping telemetry for player %s", playerID)
+		return nil
+	}
+}
+
+// telemetryLoop aggregates telemetry messages and writes them in batches.
+func (p *Publisher) telemetryLoop() {
+	batch := make([]kafka.Message, 0, 256)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		// try write, ignore errors but log
+		ctx := context.Background()
+		if err := p.telemetryWriter.WriteMessages(ctx, batch...); err != nil {
+			log.Printf("Failed to write telemetry batch: %v", err)
+		}
+		batch = batch[:0]
 	}
 
-	return nil
+	for {
+		select {
+		case msg := <-p.telemetryCh:
+			batch = append(batch, msg)
+			if len(batch) >= 100 {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
 }
 
 func traceHeaders(ctx context.Context) []kafka.Header {

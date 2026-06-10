@@ -8,41 +8,41 @@ import (
 
 // MatchmakingRequest represents a player waiting to be matched
 type MatchmakingRequest struct {
-	PlayerID   string
-	Username   string
-	EloRating  int
-	QueuedAt   time.Time
+	PlayerID  string
+	Username  string
+	EloRating int
+	QueuedAt  time.Time
 }
 
 // MatchmakingConfig configures matchmaking behavior
 type MatchmakingConfig struct {
-	MinPlayers       int
-	MaxPlayers       int
-	WindowSeconds    int
-	InitialEloRange  int
-	MaxEloRange      int
+	MinPlayers         int
+	MaxPlayers         int
+	WindowSeconds      int
+	InitialEloRange    int
+	MaxEloRange        int
 	RangeExpansionRate int
 }
 
 // DefaultConfig returns the default matchmaking configuration
 func DefaultConfig() MatchmakingConfig {
 	return MatchmakingConfig{
-		MinPlayers:        2,
-		MaxPlayers:        8,
-		WindowSeconds:     30,
-		InitialEloRange:   100,
-		MaxEloRange:       500,
+		MinPlayers:         2,
+		MaxPlayers:         8,
+		WindowSeconds:      30,
+		InitialEloRange:    100,
+		MaxEloRange:        500,
 		RangeExpansionRate: 50,
 	}
 }
 
 // Matcher handles lobby assembly using Elo-based matching
 type Matcher struct {
-	mu       sync.Mutex
-	config   MatchmakingConfig
-	queue    []*MatchmakingRequest
-	lobbies  chan []*MatchmakingRequest
-	stopCh   chan struct{}
+	mu      sync.Mutex
+	config  MatchmakingConfig
+	queue   []*MatchmakingRequest
+	lobbies chan []*MatchmakingRequest
+	stopCh  chan struct{}
 }
 
 // NewMatcher creates a new matchmaker

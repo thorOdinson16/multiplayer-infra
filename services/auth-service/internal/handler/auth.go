@@ -103,19 +103,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.store.GetPlayerByUsername(req.Username); err == nil {
-		writeJSON(w, http.StatusConflict, ErrorResponse{
-			Error:   "username_exists",
-			Message: "Username already exists",
-		})
-		return
-	} else if !errors.Is(err, gocb.ErrDocumentNotFound) {
-		writeJSON(w, http.StatusInternalServerError, ErrorResponse{
-			Error:   "lookup_error",
-			Message: "Failed to check username",
-		})
-		return
-	}
+	// Try to create player. Username uniqueness is enforced via a mapping document
+	// in the store; CreatePlayer will return ErrDocumentExists if the username is taken.
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -134,8 +123,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.CreatePlayer(player); err != nil {
 		if errors.Is(err, gocb.ErrDocumentExists) {
 			writeJSON(w, http.StatusConflict, ErrorResponse{
-				Error:   "player_exists",
-				Message: "Player already exists",
+				Error:   "username_exists",
+				Message: "Username already exists",
 			})
 			return
 		}

@@ -16,7 +16,9 @@ func main() {
 	serverPort := getEnv("SERVER_PORT", "8080")
 
 	rmq, err := consumer.NewRabbitMQConsumer(rmqURL)
-	if err != nil { log.Fatalf("Failed to connect to RabbitMQ: %v", err) }
+	if err != nil {
+		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
+	}
 	defer rmq.Close()
 
 	d := dispatcher.NewDispatcher()
@@ -25,10 +27,12 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK); w.Write([]byte("OK"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK); w.Write([]byte("READY"))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("READY"))
 	})
 
 	server := &http.Server{Addr: ":" + serverPort, Handler: mux}
@@ -45,6 +49,8 @@ func main() {
 }
 
 func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" { return value }
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
 	return defaultValue
 }

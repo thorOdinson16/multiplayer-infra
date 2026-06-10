@@ -15,16 +15,21 @@ type Notification struct {
 }
 
 type RabbitMQConsumer struct {
-	conn    *amqp091.Connection
-	channel *amqp091.Channel
+	conn     *amqp091.Connection
+	channel  *amqp091.Channel
 	onNotify func(*Notification)
 }
 
 func NewRabbitMQConsumer(url string) (*RabbitMQConsumer, error) {
 	conn, err := amqp091.Dial(url)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	ch, err := conn.Channel()
-	if err != nil { conn.Close(); return nil, err }
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
 	return &RabbitMQConsumer{conn: conn, channel: ch}, nil
 }
 
