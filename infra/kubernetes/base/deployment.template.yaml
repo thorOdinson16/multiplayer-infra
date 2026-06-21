@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: SERVICE_NAME
+  labels:
+    app: SERVICE_NAME
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: SERVICE_NAME
+  template:
+    metadata:
+      labels:
+        app: SERVICE_NAME
+    spec:
+      containers:
+        - name: SERVICE_NAME
+          image: SERVICE_IMAGE
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PORT
+              value: "8000"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
