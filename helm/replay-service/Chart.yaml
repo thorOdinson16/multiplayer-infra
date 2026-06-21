@@ -1,6 +1,0 @@
-apiVersion: v2
-name: replay-service
-description: Replay Service for multiplayer-infra
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: analytics-service-config
-  namespace: {{ .Release.Namespace }}
-data:
-  KAFKA_BROKERS: {{ .Values.kafka.brokers }}
