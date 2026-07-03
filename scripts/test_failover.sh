@@ -5,8 +5,13 @@ set -e
 echo "=== Failover Test ==="
 echo ""
 
-# 1. Identify the leader container via etcd leader key
-LEADER_INSTANCE=$(docker exec multiplayer-infra-etcd-1 etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+# 1. Identify the etcd container and leader
+ETCD_CONTAINER=$(docker ps --filter "label=com.docker.compose.service=etcd" --format "{{.Names}}" | head -1)
+if [ -z "$ETCD_CONTAINER" ]; then
+  echo "ERROR: No etcd container found. Is docker-compose running?"
+  exit 1
+fi
+LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
 if [ -z "$LEADER_INSTANCE" ]; then
   echo "ERROR: No leader found in etcd. Is the game-room running?"
   exit 1
@@ -49,9 +54,9 @@ echo ""
 # 4. Wait for takeover by remaining replica
 echo "--- Waiting for failover ---"
 for i in $(seq 1 30); do
-  NEW_LEADER=$(docker exec multiplayer-infra-etcd-1 etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+  NEW_LEADER=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
   if [ -n "$NEW_LEADER" ] && [ "$NEW_LEADER" != "$LEADER_INSTANCE" ]; then
-    echo "  New leader: $NEW_LEADER (after ${i}s)"
+    echo "  New leader: $NEW_LEADER (after ${i}s, etcd=$ETCD_CONTAINER)"
     break
   fi
   sleep 1

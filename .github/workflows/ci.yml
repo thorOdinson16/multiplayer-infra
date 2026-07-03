@@ -69,9 +69,10 @@ jobs:
           for svc in services/*/; do
             service_name=$(basename "$svc")
             echo "Building $service_name..."
-            if ! docker build -t "multiplayer-$service_name:ci" "$svc" 2>&1; then
-              echo "Build failed for $service_name"
-              failures=$((failures + 1))
+            if [ "$service_name" = "game-room" ]; then
+              docker build -t "multiplayer-$service_name:ci" -f "$svc/Dockerfile" . 2>&1 || failures=$((failures + 1))
+            else
+              docker build -t "multiplayer-$service_name:ci" "$svc" 2>&1 || failures=$((failures + 1))
             fi
           done
           docker build -t "multiplayer-client:ci" client/ 2>&1 || failures=$((failures + 1))

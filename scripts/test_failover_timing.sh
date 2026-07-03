@@ -10,8 +10,13 @@ echo "=== Failover Timing Test ==="
 echo "SLA: a live replica assumes leadership within ${MAX_FAILOVER_SECONDS}s"
 echo ""
 
-# 1. Identify the leader via etcd
-LEADER_INSTANCE=$(docker exec multiplayer-infra-etcd-1 etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+# 1. Identify the etcd container and leader
+ETCD_CONTAINER=$(docker ps --filter "label=com.docker.compose.service=etcd" --format "{{.Names}}" | head -1)
+if [ -z "$ETCD_CONTAINER" ]; then
+  echo "FAIL: No etcd container found. Is docker-compose running?"
+  exit 1
+fi
+LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
 if [ -z "$LEADER_INSTANCE" ]; then
   echo "FAIL: No leader found in etcd. Is the game-room running?"
   exit 1
@@ -54,7 +59,7 @@ docker kill "$LEADER_CONTAINER" >/dev/null 2>&1
 RECOVERED=false
 for i in $(seq 1 "$MAX_FAILOVER_SECONDS"); do
   sleep 1
-  NEW_LEADER_INSTANCE=$(docker exec multiplayer-infra-etcd-1 etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+  NEW_LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
   if [ -n "$NEW_LEADER_INSTANCE" ] && [ "$NEW_LEADER_INSTANCE" != "$LEADER_INSTANCE" ]; then
     END=$(date +%s.%N)
     RECOVERED=true
