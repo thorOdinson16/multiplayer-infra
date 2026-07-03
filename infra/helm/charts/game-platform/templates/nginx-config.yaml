@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: game-platform
+  labels:
+    app: nginx
+data:
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        map $http_upgrade $connection_upgrade {
+            default upgrade;
+            '' close;
+        }
+
+        upstream auth { server auth:8000; }
+        upstream matchmaking { server matchmaking:8000; }
+        upstream game_room { server game-room:8000; }
+        upstream reconnect { server reconnect-handler:8000; }
+        upstream replay { server replay:8000; }
+        upstream leaderboard { server leaderboard:8000; }
+        upstream analytics { server analytics:8000; }
+        upstream notification { server notification:8000; }
+
+        include /etc/nginx/conf.d/*.conf;
+
+        limit_req_zone $binary_remote_addr zone=auth_limit:10m rate=10r/s;
+        limit_req_zone $binary_remote_addr zone=ws_limit:10m rate=30r/s;
+        limit_req_zone $binary_remote_addr zone=api_limit:10m rate=20r/s;
+
+        server {
+            listen 80;
+            return 301 https://$host$request_uri;
+        }
+
+        server {
+            listen 443 ssl;
+            client_max_body_size 10M;
+
+            ssl_certificate /etc/nginx/certs/server.crt;
+            ssl_certificate_key /etc/nginx/certs/server.key;
+
+            location /auth/ {
+                limit_req zone=auth_limit burst=20 nodelay;
+                proxy_pass http://auth/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /players/ {
+                limit_req zone=api_limit burst=20 nodelay;
+                proxy_pass http://auth/players/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /.well-known/ {
+                proxy_pass http://auth/.well-known/;
+                proxy_set_header Host $host;
+            }
+
+            location /matchmaking/ {
+                limit_req zone=api_limit burst=10 nodelay;
+                proxy_pass http://matchmaking/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /reconnect {
+                limit_req zone=api_limit burst=10 nodelay;
+                proxy_pass http://reconnect/reconnect;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /replay/ {
+                proxy_pass http://replay/replay/;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /leaderboard {
+                proxy_pass http://leaderboard/leaderboard;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+
+            location /metrics {
+                proxy_pass http://analytics/metrics;
+                proxy_set_header Host $host;
+            }
+
+            location /ws {
+                limit_req zone=ws_limit burst=50 nodelay;
+                resolver kube-dns.kube-system.svc.cluster.local valid=5s;
+                set $backend_upstream $game_room_upstream;
+                proxy_pass http://$backend_upstream/ws;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection $connection_upgrade;
+                proxy_set_header Host $host;
+                proxy_read_timeout 86400;
+            }
+
+            location /ws/notifications {
+                proxy_pass http://notification/ws/notifications;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection $connection_upgrade;
+                proxy_set_header Host $host;
+                proxy_read_timeout 86400;
+            }
+
+            location /health {
+                proxy_pass http://auth/health;
+            }
+
+            location / {
+                return 404;
+            }
+        }
+    }

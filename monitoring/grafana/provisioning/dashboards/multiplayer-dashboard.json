@@ -1,0 +1,75 @@
+{
+  "id": null,
+  "uid": "multiplayer-infra",
+  "title": "Multiplayer Infrastructure",
+  "tags": ["multiplayer", "infra"],
+  "timezone": "browser",
+  "schemaVersion": 36,
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Active Matches",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "gameroom_active_matches", "legendFormat": "Active" }],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "Matchmaking Queue Depth",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "matchmaking_queue_depth", "legendFormat": "Queue" }],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 }
+    },
+    {
+      "id": 3,
+      "title": "Lobbies Assembled",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "rate(matchmaking_lobbies_assembled[1m])", "legendFormat": "Lobbies/min" }],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 }
+    },
+    {
+      "id": 4,
+      "title": "Broker Status",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "matchmaking_broker_unavailable", "legendFormat": "Unavailable" }],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 }
+    },
+    {
+      "id": 5,
+      "title": "Tick Latency (avg)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "rate(gameroom_tick_latency_seconds_sum[1m]) / rate(gameroom_tick_latency_seconds_count[1m])", "legendFormat": "Avg" }],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 }
+    },
+    {
+      "id": 6,
+      "title": "Elections Rate",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "rate(gameroom_election_count[5m])", "legendFormat": "Elections/5m" }],
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 }
+    },
+    {
+      "id": 7,
+      "title": "State Broadcasts",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "rate(gameroom_state_broadcasts_total[1m])", "legendFormat": "Broadcasts/s" }],
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 }
+    },
+    {
+      "id": 8,
+      "title": "Player Connections",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [{ "expr": "rate(gameroom_player_connections_total[1m])", "legendFormat": "Connections/min" }],
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 }
+    }
+  ]
+}

@@ -1,30 +1,417 @@
+name: multiplayer-infra
+
 services:
-  # Example – will be populated as services are built
+  # ====================== Infrastructure ======================
+
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   rabbitmq:
     image: rabbitmq:3-management-alpine
     ports:
       - "5672:5672"
       - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+    healthcheck:
+      test: rabbitmq-diagnostics -q check_port_connectivity
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    environment:
+      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
+      ETCD_ADVERTISE_CLIENT_URLS: "http://etcd:2379"
+    command:
+      - etcd
+      - --name=etcd0
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-cluster=etcd0=http://etcd:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=local-cluster
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   kafka:
     image: apache/kafka:3.7.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: "local-cluster-001"
     ports:
       - "9092:9092"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  kafka-init:
+    image: python:3.11-slim
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./scripts/kafka_init.py:/app/init.py
+    working_dir: /app
+    command: ["sh", "-c", "pip install -q confluent-kafka && python init.py"]
+
   couchbase:
     image: couchbase:7.6.0
     ports:
       - "8091-8096:8091-8096"
       - "11210:11210"
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.14
-    ports:
-      - "2379:2379"
+    environment:
+      COUCHBASE_ADMINISTRATOR_USERNAME: ${COUCHBASE_USERNAME:-Administrator}
+      COUCHBASE_ADMINISTRATOR_PASSWORD: ${COUCHBASE_PASSWORD:-password}
+    volumes:
+      - couchbase_data:/opt/couchbase/var
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8091/pools >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+
+  couchbase-init:
+    image: python:3.11-slim
+    depends_on:
+      couchbase:
+        condition: service_healthy
+    volumes:
+      - ./scripts/couchbase_init.py:/app/init.py
+    working_dir: /app
+    command: ["sh", "-c", "pip install -q requests && python init.py"]
+
   minio:
-    image: minio/minio
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
       - "9001:9001"
-    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq-setup:
+    build:
+      context: .
+      dockerfile: Dockerfile.rabbitmq-setup
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # ====================== Monitoring ======================
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    volumes:
+      - ./monitoring/opentelemetry-collector-config.yaml:/etc/otel-collector-config.yaml
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    depends_on:
+      - jaeger
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+    depends_on:
+      - prometheus
+
+  nginx-init:
+    image: alpine:3.19
+    volumes:
+      - nginx_certs:/etc/nginx/certs
+      - ./scripts/generate_cert.sh:/generate_cert.sh
+    command: ["sh", "/generate_cert.sh"]
+
+  nginx:
+    image: nginx:1.24-alpine
+    ports:
+      - "8080:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./infra/nginx/conf.d:/etc/nginx/conf.d
+      - nginx_certs:/etc/nginx/certs:ro
+    depends_on:
+      nginx-init:
+        condition: service_completed_successfully
+      auth:
+        condition: service_started
+      game-room:
+        condition: service_started
+
+  etcd-watcher:
+    build: services/etcd-watcher
+    environment:
+      - ETCD_HOST=etcd
+      - ETCD_PORT=2379
+      - NGINX_CONF_DIR=/nginx-conf
+      - OTEL_SERVICE_NAME=etcd-watcher-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    volumes:
+      - ./infra/nginx/conf.d:/nginx-conf
+    depends_on:
+      - etcd
+      - nginx
+
+  # ====================== Core Services ======================
+
+  auth:
+    build: services/auth
+    environment:
+      - COUCHBASE_HOST=couchbase
+      - COUCHBASE_SESSIONS_BUCKET=sessions
+      - COUCHBASE_PLAYERS_BUCKET=players
+      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
+      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - JWT_PRIVATE_KEY_PATH=/app/keys/private.pem
+      - JWT_PUBLIC_KEY_PATH=/app/keys/public.pem
+      - OTEL_SERVICE_NAME=auth-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./services/auth/keys:/app/keys
+    depends_on:
+      couchbase-init:
+        condition: service_completed_successfully
+
+  matchmaking:
+    build: services/matchmaking
+    environment:
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      - AUTH_SERVICE_URL=http://auth:8000
+      - ETCD_HOST=etcd
+      - ETCD_PORT=2379
+      - OTEL_SERVICE_NAME=matchmaking-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8002:8000"
+    depends_on:
+      rabbitmq-setup:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_healthy
+      auth:
+        condition: service_started
+
+  game-room:
+    build:
+      context: .
+      dockerfile: services/game-room/Dockerfile
+    restart: unless-stopped
+    environment:
+      - MATCH_ID=test-match-001
+      - INSTANCE_ID=room-1
+      - ETCD_HOST=etcd
+      - REDIS_HOST=redis
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - COUCHBASE_HOST=couchbase
+      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
+      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - AUTH_SERVICE_URL=http://auth:8000
+      - OTEL_SERVICE_NAME=game-room-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8003:8000"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+
+  game-room-2:
+    build:
+      context: .
+      dockerfile: services/game-room/Dockerfile
+    restart: unless-stopped
+    environment:
+      - MATCH_ID=test-match-001
+      - INSTANCE_ID=room-2
+      - ETCD_HOST=etcd
+      - REDIS_HOST=redis
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - COUCHBASE_HOST=couchbase
+      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
+      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - AUTH_SERVICE_URL=http://auth:8000
+      - OTEL_SERVICE_NAME=game-room-service-2
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8009:8000"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      etcd:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+
+  replay:
+    build: services/replay
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - COUCHBASE_HOST=couchbase
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - OTEL_SERVICE_NAME=replay-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8004:8000"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      couchbase-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+
+  leaderboard:
+    build: services/leaderboard
+    environment:
+      - COUCHBASE_HOST=couchbase
+      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
+      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - OTEL_SERVICE_NAME=leaderboard-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8005:8000"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      couchbase-init:
+        condition: service_completed_successfully
+
+  analytics:
+    build: services/analytics
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - OTEL_SERVICE_NAME=analytics-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8006:8000"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  notification:
+    build: services/notification
+    environment:
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      - REDIS_HOST=redis
+      - AUTH_SERVICE_URL=http://auth:8000
+      - OTEL_SERVICE_NAME=notification-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8007:8000"
+    depends_on:
+      rabbitmq-setup:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+
+  reconnect-handler:
+    build: services/reconnect-handler
+    environment:
+      - REDIS_HOST=redis
+      - ETCD_HOST=etcd
+      - AUTH_SERVICE_URL=http://auth:8000
+      - OTEL_SERVICE_NAME=reconnect-handler-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+    ports:
+      - "8008:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+      auth:
+        condition: service_started
+
+  game-client:
+    build: client
+    ports:
+      - "3000:3000"
+    depends_on:
+      - nginx
+
+volumes:
+  couchbase_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+  nginx_certs:

@@ -10,8 +10,8 @@ class Settings(BaseSettings):
     couchbase_password: str = "password"
 
     # JWT
-    jwt_private_key_path: str = "private.pem"
-    jwt_public_key_path: str = "public.pem"
+    jwt_private_key_path: str = os.environ.get("JWT_PRIVATE_KEY_PATH", "private.pem")
+    jwt_public_key_path: str = os.environ.get("JWT_PUBLIC_KEY_PATH", "public.pem")
     jwt_algorithm: str = "RS256"
     jwt_expire_minutes: int = 24 * 60  # 24 hours
 

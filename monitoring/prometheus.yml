@@ -1,10 +1,29 @@
 global:
   scrape_interval: 15s
+  evaluation_interval: 15s
+
 scrape_configs:
-  - job_name: 'services'
-    kubernetes_sd_configs:
-      - role: pod
-    relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_label_app]
-        action: keep
-        regex: .+
+  - job_name: 'auth'
+    static_configs:
+      - targets: ['auth:8000']
+  - job_name: 'matchmaking'
+    static_configs:
+      - targets: ['matchmaking:8000']
+  - job_name: 'game-room'
+    static_configs:
+      - targets: ['game-room:8000']
+  - job_name: 'analytics'
+    static_configs:
+      - targets: ['analytics:8000']
+  - job_name: 'replay'
+    static_configs:
+      - targets: ['replay:8000']
+  - job_name: 'leaderboard'
+    static_configs:
+      - targets: ['leaderboard:8000']
+  - job_name: 'notification'
+    static_configs:
+      - targets: ['notification:8000']
+  - job_name: 'reconnect-handler'
+    static_configs:
+      - targets: ['reconnect-handler:8000']

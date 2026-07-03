@@ -1,0 +1,140 @@
+global:
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+
+infrastructure:
+  redis:
+    enabled: true
+    image: redis:7-alpine
+  rabbitmq:
+    enabled: true
+    image: rabbitmq:3-management-alpine
+  etcd:
+    enabled: true
+    image: quay.io/coreos/etcd:v3.5.14
+  kafka:
+    enabled: true
+    image: apache/kafka:3.7.0
+  minio:
+    enabled: true
+    image: minio/minio:latest
+  couchbase:
+    enabled: true
+    image: couchbase:7.6.0
+
+services:
+  auth:
+    replicas: 2
+    image: multiplayer-auth:latest
+    port: 8000
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+    env:
+      COUCHBASE_HOST: couchbase
+      JWT_PRIVATE_KEY_PATH: /app/keys/private.pem
+      JWT_PUBLIC_KEY_PATH: /app/keys/public.pem
+
+  matchmaking:
+    replicas: 2
+    image: multiplayer-matchmaking:latest
+    port: 8000
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+    env:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      ETCD_HOST: etcd
+
+  gameRoom:
+    replicas: 3
+    image: multiplayer-game-room:latest
+    port: 8000
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 1
+        memory: 512Mi
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+    env:
+      ETCD_HOST: etcd
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  replay:
+    replicas: 1
+    image: multiplayer-replay:latest
+    port: 8000
+    env:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MINIO_ENDPOINT: minio:9000
+
+  leaderboard:
+    replicas: 1
+    image: multiplayer-leaderboard:latest
+    port: 8000
+    env:
+      COUCHBASE_HOST: couchbase
+
+  analytics:
+    replicas: 1
+    image: multiplayer-analytics:latest
+    port: 8000
+    env:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+
+  notification:
+    replicas: 2
+    image: multiplayer-notification:latest
+    port: 8000
+    env:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      REDIS_HOST: redis
+
+  reconnectHandler:
+    replicas: 2
+    image: multiplayer-reconnect-handler:latest
+    port: 8000
+    env:
+      REDIS_HOST: redis
+      ETCD_HOST: etcd
+
+  nginx:
+    replicas: 2
+    image: nginx:1.24-alpine
+    port: 80
+    env: {}
+
+monitoring:
+  prometheus:
+    enabled: true
+    image: prom/prometheus:latest
+  grafana:
+    enabled: true
+    image: grafana/grafana:latest
+  jaeger:
+    enabled: true
+    image: jaegertracing/all-in-one:latest
+  otelCollector:
+    enabled: true
+    image: otel/opentelemetry-collector-contrib:latest
+
+etcdWatcher:
+  enabled: true
+  image: multiplayer-etcd-watcher:latest
+  port: 8000

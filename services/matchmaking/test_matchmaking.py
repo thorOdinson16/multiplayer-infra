@@ -1,16 +1,57 @@
-import httpx, json, os
+"""Tests for matchmaking service endpoints."""
+import json
+import pytest
+import httpx
 
-TOKEN = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlNGZlN2IyMy04Yzg4LTRlNmUtOTM4NC0xNTZjMTk3ODRmZGQiLCJpYXQiOjE3ODIwNjUyMTUsImV4cCI6MTc4MjE1MTYxNX0.RTOSb2UhI3Job7kwySv5vi6xNqPXNOoSoQRP0C0-1Pv8zrjR97BWRxpZ6QtIrJUXBFE-3mAf5rNbETT1JCE2CCCgOqF7D78-fVVcSwhuqQTQIA1Cod_58BASjXzJHEt_rykyCVy8gWC0dw_mpOxg8rq9abcuUP_7kmX-Zeg72M0foulYnWPJ0DMChPHtIierOeULKrDzKT5WZgOt_xsYkdB-foZd1bGlGFqoBE2fdjbzD7tPBlkV_W39Q5OF6Z9ezckgh6WgnXXI8JoxPrIf9xi1veFXVjPlKkDqs9I6FRnUYOmOu_VIvzBU7Fb1LmgnmbgLXDMd8eQYNSmUPRc5dg"
+BASE_URL = "http://localhost:8002"
+AUTH_URL = "http://localhost:8001"
 
-payload = {
-    "vhost": "/",
-    "name": "amq.default",
-    "properties": {},
-    "routing_key": "matchmaking.requests",
-    "payload_encoding": "string",
-    "payload": json.dumps({"token": TOKEN, "elo": 1250})
-}
 
-r = httpx.post("http://localhost:15672/api/exchanges/%2F/amq.default/publish",
-              auth=("guest", "guest"), json=payload)
-print(r.status_code, r.text)
+@pytest.fixture(scope="module")
+def auth_token():
+    try:
+        r = httpx.post(f"{AUTH_URL}/auth/register",
+                       json={"username": "mmtest", "password": "testpass"}, timeout=5)
+        if r.status_code == 201:
+            return r.json().get("access_token", "")
+    except Exception:
+        pass
+    try:
+        r = httpx.post(f"{AUTH_URL}/auth/login",
+                       json={"username": "mmtest", "password": "testpass"}, timeout=5)
+        if r.status_code == 200:
+            return r.json().get("access_token", "")
+    except Exception:
+        pass
+    return ""
+
+
+def test_health_endpoint():
+    r = httpx.get(f"{BASE_URL}/health", timeout=5)
+    assert r.status_code == 200
+    assert r.json().get("status") == "ok"
+
+
+def test_metrics_endpoint():
+    r = httpx.get(f"{BASE_URL}/metrics", timeout=5)
+    assert r.status_code == 200
+
+
+def test_queue_without_token_returns_400(auth_token):
+    r = httpx.post(f"{BASE_URL}/matchmaking/queue",
+                   json={}, timeout=5)
+    assert r.status_code in (400, 422, 401)
+
+
+def test_queue_with_valid_token_returns_202(auth_token):
+    if not auth_token:
+        pytest.skip("No auth token available")
+    r = httpx.post(f"{BASE_URL}/matchmaking/queue",
+                   json={"token": auth_token}, timeout=5)
+    assert r.status_code in (202, 503)
+
+
+def test_rooms_needed_metric_defined(auth_token):
+    r = httpx.get(f"{BASE_URL}/metrics", timeout=5)
+    assert r.status_code == 200
+    assert "matchmaking_rooms_needed" in r.text

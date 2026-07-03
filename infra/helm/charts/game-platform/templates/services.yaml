@@ -1,0 +1,5 @@
+{{- $nameMap := dict "auth" "auth" "matchmaking" "matchmaking" "gameRoom" "game-room" "replay" "replay" "leaderboard" "leaderboard" "analytics" "analytics" "notification" "notification" "reconnectHandler" "reconnect-handler" "nginx" "nginx" }}
+{{- range $key, $values := .Values.services }}
+{{- $name := index $nameMap $key | default $key }}
+{{ include "game-platform.service" (dict "name" $name "values" $values "root" $) }}
+{{- end }}

@@ -1,10 +1,57 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Arena Game</title>
+  <title>Arena Game - Multiplayer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; color: #eee; font-family: monospace; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 20px; }
+    #container { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
+    #game-area { position: relative; }
+    #gameCanvas { border: 2px solid #e94560; background: #16213e; display: block; cursor: crosshair; }
+    #sidebar { width: 300px; }
+    #login-panel, #status-panel, #leaderboard-panel { background: #0f3460; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+    #login-panel h3, #status-panel h3, #leaderboard-panel h3 { color: #e94560; margin-bottom: 10px; }
+    input { width: 100%; padding: 8px; margin-bottom: 8px; background: #1a1a2e; border: 1px solid #533483; color: #eee; border-radius: 4px; }
+    button { width: 100%; padding: 10px; background: #e94560; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-bottom: 5px; }
+    button:hover { background: #c7364f; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #player-list { list-style: none; font-size: 14px; }
+    #player-list li { padding: 4px 0; border-bottom: 1px solid #533483; }
+    .connected { color: #4ecca3; }
+    .disconnected { color: #e94560; }
+    #status-text { font-size: 14px; margin-bottom: 10px; }
+    #controls-info { font-size: 12px; color: #aaa; margin-top: 10px; }
+  </style>
 </head>
 <body>
-  <canvas id="gameCanvas"></canvas>
+  <div id="container">
+    <div id="game-area">
+      <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
+    <div id="sidebar">
+      <div id="login-panel">
+        <h3>Login</h3>
+        <input type="text" id="username" placeholder="Username" />
+        <input type="password" id="password" placeholder="Password" />
+        <button id="btn-login">Login</button>
+        <button id="btn-register">Register</button>
+      </div>
+      <div id="status-panel">
+        <h3>Status</h3>
+        <div id="status-text">Not connected</div>
+        <button id="btn-join-matchmaking" disabled>Join Matchmaking</button>
+        <button id="btn-spectate" disabled>Spectate Match</button>
+        <button id="btn-disconnect" disabled>Disconnect</button>
+        <div id="controls-info">
+          WASD: Move | Click: Shoot nearest enemy | Spectator delay: 10s
+        </div>
+      </div>
+      <div id="leaderboard-panel">
+        <h3>Leaderboard</h3>
+        <div id="leaderboard-content">Loading...</div>
+      </div>
+    </div>
+  </div>
   <script src="game.js"></script>
 </body>
 </html>

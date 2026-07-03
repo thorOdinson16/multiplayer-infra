@@ -1,6 +1,7 @@
 import requests
+import os
 
-HOST = "localhost:15672"
+HOST = os.environ.get("RABBITMQ_HOST", "rabbitmq") + ":15672"
 AUTH = ("guest", "guest")
 
 def put(url, json):

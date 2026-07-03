@@ -63,3 +63,12 @@ def get_player_by_username(username: str) -> dict | None:
     if rows:
         return rows[0][settings.couchbase_players_bucket]
     return None
+
+def close_connections():
+    global _cluster
+    if _cluster is not None:
+        try:
+            _cluster.close()
+        except Exception:
+            pass
+        _cluster = None

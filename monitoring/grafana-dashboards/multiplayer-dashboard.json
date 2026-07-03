@@ -1,0 +1,70 @@
+{
+  "title": "Multiplayer Infrastructure",
+  "tags": ["multiplayer", "infrastructure"],
+  "schemaVersion": 36,
+  "panels": [
+    {
+      "title": "Active Matches",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "gameroom_active_matches", "legendFormat": "Active Matches"}],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0}
+    },
+    {
+      "title": "Matchmaking Queue Depth",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "matchmaking_queue_depth", "legendFormat": "Queue Depth"}],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0}
+    },
+    {
+      "title": "Tick Processing Latency",
+      "type": "heatmap",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "rate(gameroom_tick_latency_seconds_sum[1m]) / rate(gameroom_tick_latency_seconds_count[1m])", "legendFormat": "Avg Latency"}],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0}
+    },
+    {
+      "title": "Leader Elections",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "rate(gameroom_election_count[5m])", "legendFormat": "Elections/5m"}],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8}
+    },
+    {
+      "title": "Lobbies Assembled",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "rate(matchmaking_lobbies_assembled[1m])", "legendFormat": "Lobbies/min"}],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8}
+    },
+    {
+      "title": "Consumer Lag",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "analytics_consumer_lag", "legendFormat": "Lag"}],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8}
+    },
+    {
+      "title": "State Broadcasts",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "rate(gameroom_state_broadcasts_total[1m])", "legendFormat": "Broadcasts/s"}],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16}
+    },
+    {
+      "title": "Player Connections",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "rate(gameroom_player_connections_total[1m])", "legendFormat": "Connections/min"}],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16}
+    },
+    {
+      "title": "Broker Unavailable",
+      "type": "stat",
+      "datasource": "Prometheus",
+      "targets": [{"expr": "matchmaking_broker_unavailable", "legendFormat": "Broker Down"}],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16}
+    }
+  ]
+}
