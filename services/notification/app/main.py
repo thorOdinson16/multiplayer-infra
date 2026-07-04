@@ -142,7 +142,6 @@ async def notification_websocket(websocket: WebSocket):
 
 @app.on_event("shutdown")
 async def shutdown():
-    global rabbitmq_connection, redis_client
     try:
         if rabbitmq_connection and not rabbitmq_connection.is_closed:
             await rabbitmq_connection.close()

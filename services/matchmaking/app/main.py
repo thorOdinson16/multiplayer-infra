@@ -220,7 +220,6 @@ async def queue_matchmaking(body: dict):
 
 @app.on_event("shutdown")
 async def shutdown():
-    global rabbitmq_connection, channel, publish_channel
     try:
         if channel and not channel.is_closed:
             await channel.close()

@@ -38,7 +38,6 @@ connected_spectators = {}
 
 
 async def handle_leadership_loss():
-    global game_loop
     logger.warning("Leadership lost - stopping game loop and dropping connections")
     if game_loop:
         game_loop.running = False

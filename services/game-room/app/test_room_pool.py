@@ -4,9 +4,9 @@ import sys
 import unittest
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from room_pool import register_room, mark_in_use, remove_room, get_available_room
+from app.room_pool import register_room, mark_in_use, remove_room, get_available_room
 
 
 class TestRoomPool(unittest.TestCase):

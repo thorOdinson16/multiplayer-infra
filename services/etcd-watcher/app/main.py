@@ -88,7 +88,7 @@ def _do_write():
 
 
 def _schedule_debounced_write(upstreams):
-    global _debounce_timer, _pending_upstreams
+    global _debounce_timer
     with _debounce_lock:
         _pending_upstreams.update(upstreams)
         if _debounce_timer is None:
