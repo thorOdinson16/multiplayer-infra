@@ -88,22 +88,37 @@ jobs:
       - name: Start services
         run: |
           docker compose up -d
-          sleep 30
+          sleep 60
       - name: Wait for health
         run: |
-          for i in $(seq 1 60); do
+          healthy=false
+          for i in $(seq 1 90); do
             status=$(curl -sfk http://localhost:8080/health 2>/dev/null || echo "down")
             if [ "$status" != "down" ]; then
               echo "Services healthy after ${i}s"
+              healthy=true
               break
             fi
             sleep 2
           done
-      - name: Debug kafka logs
+          if [ "$healthy" != "true" ]; then
+            echo "FAIL: Services never became healthy"
+            docker compose ps
+            exit 1
+          fi
+      - name: Debug service logs
         if: failure()
         run: |
-          docker compose logs kafka
+          echo "=== Container Status ==="
           docker compose ps
+          echo "=== Kafka ==="
+          docker compose logs --tail=20 kafka 2>/dev/null || true
+          echo "=== Couchbase ==="
+          docker compose logs --tail=20 couchbase 2>/dev/null || true
+          echo "=== Auth ==="
+          docker compose logs --tail=20 auth 2>/dev/null || true
+          echo "=== Nginx ==="
+          docker compose logs --tail=20 nginx 2>/dev/null || true
       - name: Install Python deps for WS tests
         run: |
           pip install websockets
