@@ -88,10 +88,10 @@ jobs:
       - name: Start services
         run: |
           docker compose up -d
-          sleep 30
+          sleep 60
       - name: Wait for health
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             status=$(curl -sf http://localhost:8080/health 2>/dev/null || echo "down")
             if [ "$status" != "down" ]; then
               echo "Services healthy after ${i}s"
@@ -99,6 +99,11 @@ jobs:
             fi
             sleep 2
           done
+      - name: Debug kafka logs
+        if: failure()
+        run: |
+          docker compose logs kafka
+          docker compose ps
       - name: Install Python deps for WS tests
         run: |
           pip install websockets
