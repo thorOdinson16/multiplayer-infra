@@ -11,7 +11,7 @@ from app.room_pool import register_room, mark_in_use, remove_room, get_available
 
 class TestRoomPool(unittest.TestCase):
 
-    @patch("room_pool.get_etcd_client")
+    @patch("app.room_pool.get_etcd_client")
     def test_register_room(self, mock_get_etcd):
         mock_etcd = MagicMock()
         mock_get_etcd.return_value = mock_etcd
@@ -22,7 +22,7 @@ class TestRoomPool(unittest.TestCase):
             "/rooms/available/test-room-1", "available"
         )
 
-    @patch("room_pool.get_etcd_client")
+    @patch("app.room_pool.get_etcd_client")
     def test_mark_in_use(self, mock_get_etcd):
         mock_etcd = MagicMock()
         mock_get_etcd.return_value = mock_etcd
@@ -33,7 +33,7 @@ class TestRoomPool(unittest.TestCase):
             "/rooms/available/test-room-1", "in-use"
         )
 
-    @patch("room_pool.get_etcd_client")
+    @patch("app.room_pool.get_etcd_client")
     def test_remove_room(self, mock_get_etcd):
         mock_etcd = MagicMock()
         mock_get_etcd.return_value = mock_etcd
@@ -44,7 +44,7 @@ class TestRoomPool(unittest.TestCase):
             "/rooms/available/test-room-1"
         )
 
-    @patch("room_pool.get_etcd_client")
+    @patch("app.room_pool.get_etcd_client")
     def test_get_available_room_found(self, mock_get_etcd):
         mock_etcd = MagicMock()
         mock_meta = MagicMock()
@@ -55,7 +55,7 @@ class TestRoomPool(unittest.TestCase):
         result = get_available_room()
         self.assertEqual(result, "test-room-1")
 
-    @patch("room_pool.get_etcd_client")
+    @patch("app.room_pool.get_etcd_client")
     def test_get_available_room_skips_in_use(self, mock_get_etcd):
         mock_etcd = MagicMock()
         mock_meta = MagicMock()
@@ -66,7 +66,7 @@ class TestRoomPool(unittest.TestCase):
         result = get_available_room()
         self.assertIsNone(result)
 
-    @patch("room_pool.get_etcd_client")
+    @patch("app.room_pool.get_etcd_client")
     def test_get_available_room_empty(self, mock_get_etcd):
         mock_etcd = MagicMock()
         mock_etcd.get_prefix.return_value = []
