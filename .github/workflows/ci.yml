@@ -88,7 +88,7 @@ jobs:
       - name: Start services
         run: |
           docker compose up -d
-          sleep 60
+          sleep 30
       - name: Wait for health
         run: |
           for i in $(seq 1 60); do
