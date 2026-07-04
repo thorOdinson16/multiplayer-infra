@@ -47,7 +47,7 @@ echo "Leader: $LEADER_CONTAINER ($LEADER_INSTANCE)"
 echo "Follower: $FOLLOWER_CONTAINER"
 
 # 2. Verify the follower is healthy
-HEALTH=$(curl -sf "$BASE_URL/health" 2>/dev/null || echo "down")
+HEALTH=$(curl -sfk "$BASE_URL/health" 2>/dev/null || echo "down")
 echo "Health before failover: $HEALTH"
 
 # 3. Record start time and kill leader

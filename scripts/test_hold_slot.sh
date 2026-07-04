@@ -9,13 +9,13 @@ echo ""
 
 # 1. Register/login test user
 USER="holdtest-$(date +%s)"
-RESP=$(curl -sf -X POST "$BASE_URL/auth/register" \
+RESP=$(curl -sfk -X POST "$BASE_URL/auth/register" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$USER\",\"password\":\"pass123\"}" 2>/dev/null || echo "{}")
 TOKEN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
 
 if [ -z "$TOKEN" ]; then
-  RESP=$(curl -sf -X POST "$BASE_URL/auth/login" \
+  RESP=$(curl -sfk -X POST "$BASE_URL/auth/login" \
     -H "Content-Type: application/json" \
     -d "{\"username\":\"$USER\",\"password\":\"pass123\"}" 2>/dev/null || echo "{}")
   TOKEN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)

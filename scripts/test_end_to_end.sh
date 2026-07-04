@@ -13,14 +13,14 @@ echo ""
 # 1. Health checks
 echo "--- Health Checks ---"
 for svc in auth matchmaking game-room replay leaderboard analytics notification reconnect-handler; do
-  status=$(curl -sf "$BASE_URL/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unreachable")
+  status=$(curl -sfk "$BASE_URL/health" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unreachable")
   echo "  $svc: $status"
 done
 echo ""
 
 # 2. Register a test player
 echo "--- Registration ---"
-ALICE=$(curl -sf -X POST "$BASE_URL/auth/register" \
+ALICE=$(curl -sfk -X POST "$BASE_URL/auth/register" \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","password":"pass123"}' 2>/dev/null)
 ALICE_TOKEN=$(echo "$ALICE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
@@ -29,14 +29,14 @@ if [ -n "$ALICE_TOKEN" ]; then
   echo "  Alice registered: ${ALICE_TOKEN:0:20}..."
 else
   # Try login instead (if already registered)
-  ALICE=$(curl -sf -X POST "$BASE_URL/auth/login" \
+  ALICE=$(curl -sfk -X POST "$BASE_URL/auth/login" \
     -H "Content-Type: application/json" \
     -d '{"username":"alice","password":"pass123"}' 2>/dev/null)
   ALICE_TOKEN=$(echo "$ALICE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
   echo "  Alice logged in: ${ALICE_TOKEN:0:20}..."
 fi
 
-BOB=$(curl -sf -X POST "$BASE_URL/auth/register" \
+BOB=$(curl -sfk -X POST "$BASE_URL/auth/register" \
   -H "Content-Type: application/json" \
   -d '{"username":"bob","password":"pass123"}' 2>/dev/null)
 BOB_TOKEN=$(echo "$BOB" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
@@ -44,7 +44,7 @@ BOB_TOKEN=$(echo "$BOB" | python3 -c "import sys,json; print(json.load(sys.stdin
 if [ -n "$BOB_TOKEN" ]; then
   echo "  Bob registered: ${BOB_TOKEN:0:20}..."
 else
-  BOB=$(curl -sf -X POST "$BASE_URL/auth/login" \
+  BOB=$(curl -sfk -X POST "$BASE_URL/auth/login" \
     -H "Content-Type: application/json" \
     -d '{"username":"bob","password":"pass123"}' 2>/dev/null)
   BOB_TOKEN=$(echo "$BOB" | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
@@ -54,23 +54,23 @@ echo ""
 
 # 3. Validate tokens
 echo "--- Token Validation ---"
-ALICE_VALID=$(curl -sf "$BASE_URL/auth/validate" \
+ALICE_VALID=$(curl -sfk "$BASE_URL/auth/validate" \
   -H "Authorization: Bearer $ALICE_TOKEN" 2>/dev/null)
 echo "  Alice valid: $(echo $ALICE_VALID | python3 -c "import sys,json; print(json.load(sys.stdin).get('valid',False))" 2>/dev/null)"
 
-BOB_VALID=$(curl -sf "$BASE_URL/auth/validate" \
+BOB_VALID=$(curl -sfk "$BASE_URL/auth/validate" \
   -H "Authorization: Bearer $BOB_TOKEN" 2>/dev/null)
 echo "  Bob valid: $(echo $BOB_VALID | python3 -c "import sys,json; print(json.load(sys.stdin).get('valid',False))" 2>/dev/null)"
 echo ""
 
 # 4. Get player profiles
 echo "--- Player Profiles ---"
-ALICE_PROFILE=$(curl -sf "$BASE_URL/auth/validate" \
+ALICE_PROFILE=$(curl -sfk "$BASE_URL/auth/validate" \
   -H "Authorization: Bearer $ALICE_TOKEN" 2>/dev/null)
 ALICE_PID=$(echo "$ALICE_PROFILE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('player_id',''))" 2>/dev/null)
 
 if [ -n "$ALICE_PID" ]; then
-  PROFILE=$(curl -sf "$BASE_URL/players/$ALICE_PID" \
+  PROFILE=$(curl -sfk "$BASE_URL/players/$ALICE_PID" \
     -H "Authorization: Bearer $ALICE_TOKEN" 2>/dev/null)
   echo "  Alice: $(echo $PROFILE)"
 fi
@@ -78,18 +78,18 @@ echo ""
 
 # 5. Leaderboard
 echo "--- Leaderboard ---"
-LB=$(curl -sf "$BASE_URL/leaderboard" 2>/dev/null)
+LB=$(curl -sfk "$BASE_URL/leaderboard" 2>/dev/null)
 echo "  $LB" | python3 -m json.tool 2>/dev/null || echo "  $LB"
 echo ""
 
 # 6. Matchmaking
 echo "--- Matchmaking Queue ---"
-MM_RESULT=$(curl -sf -X POST "$BASE_URL/matchmaking/queue" \
+MM_RESULT=$(curl -sfk -X POST "$BASE_URL/matchmaking/queue" \
   -H "Content-Type: application/json" \
   -d "{\"token\":\"$ALICE_TOKEN\"}" 2>/dev/null)
 echo "  Alice queued: $MM_RESULT"
 
-MM_RESULT=$(curl -sf -X POST "$BASE_URL/matchmaking/queue" \
+MM_RESULT=$(curl -sfk -X POST "$BASE_URL/matchmaking/queue" \
   -H "Content-Type: application/json" \
   -d "{\"token\":\"$BOB_TOKEN\"}" 2>/dev/null)
 echo "  Bob queued: $MM_RESULT"
@@ -97,7 +97,7 @@ echo ""
 
 # 7. Reconnect handler
 echo "--- Reconnect Handler ---"
-RECONNECT=$(curl -sf -X POST "$BASE_URL/reconnect" \
+RECONNECT=$(curl -sfk -X POST "$BASE_URL/reconnect" \
   -H "Content-Type: application/json" \
   -d "{\"token\":\"$ALICE_TOKEN\",\"match_id\":\"test-match-001\"}" 2>/dev/null)
 echo "  Reconnect: $(echo $RECONNECT | python3 -c "import sys,json; d=json.load(sys.stdin); print(f\"tick={d.get('current_tick','?')}, leader={d.get('leader_address','?')}\")" 2>/dev/null || echo "unavailable")"
@@ -105,13 +105,13 @@ echo ""
 
 # 8. Replay (if available)
 echo "--- Replay (if any matches ended) ---"
-REPLAY=$(curl -sf "$BASE_URL/replay/test-match-001" 2>/dev/null || echo "{}")
+REPLAY=$(curl -sfk "$BASE_URL/replay/test-match-001" 2>/dev/null || echo "{}")
 echo "  Replay: $(echo $REPLAY | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'{d.get(\"event_count\",0)} events, from tick {d.get(\"start_tick\",\"?\")}' )" 2>/dev/null || echo "not found")"
 echo ""
 
 # 9. Metrics
 echo "--- Prometheus Metrics (sample) ---"
-curl -sf "$BASE_URL/metrics" 2>/dev/null | grep -E "^(auth_|matchmaking_|gameroom_|analytics_|leaderboard_)" | head -20 || echo "  No custom metrics found"
+curl -sfk "$BASE_URL/metrics" 2>/dev/null | grep -E "^(auth_|matchmaking_|gameroom_|analytics_|leaderboard_)" | head -20 || echo "  No custom metrics found"
 echo ""
 
 # 10. Grafana
