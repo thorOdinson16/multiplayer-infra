@@ -11,9 +11,17 @@ if [ -z "$ETCD_CONTAINER" ]; then
   echo "ERROR: No etcd container found. Is docker-compose running?"
   exit 1
 fi
-LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+LEADER_INSTANCE=""
+for i in $(seq 1 30); do
+  LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+  if [ -n "$LEADER_INSTANCE" ]; then
+    echo "  Leader found after ${i}s"
+    break
+  fi
+  sleep 1
+done
 if [ -z "$LEADER_INSTANCE" ]; then
-  echo "ERROR: No leader found in etcd. Is the game-room running?"
+  echo "ERROR: No leader found in etcd after 30s. Is the game-room running?"
   exit 1
 fi
 echo "Leader instance: $LEADER_INSTANCE"
