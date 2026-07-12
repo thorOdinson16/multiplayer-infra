@@ -58,9 +58,25 @@ async def handle_leadership_loss():
     logger.info("Leadership loss cleanup complete")
 
 
+async def _campaign_and_start():
+    global game_loop
+    try:
+        is_leader = await election.campaign()
+        if is_leader:
+            logger.info("Elected leader, starting game loop")
+            game_loop = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
+            await game_loop.load_state()
+            asyncio.create_task(game_loop.run())
+        else:
+            logger.info("Running as follower")
+            asyncio.create_task(election.start_follower_watch())
+    except Exception as e:
+        logger.error("Campaign failed", exc_info=True)
+
+
 @app.on_event("startup")
 async def startup():
-    global match_id, instance_id, redis_client, kafka_producer, election, game_loop
+    global match_id, instance_id, redis_client, kafka_producer, election
     match_id = os.environ.get("MATCH_ID", str(uuid.uuid4()))
     instance_id = os.environ.get("INSTANCE_ID", str(uuid.uuid4()))
     logger.info(f"Starting game room for match {match_id}, instance {instance_id}")
@@ -75,15 +91,7 @@ async def startup():
     except Exception as e:
         logger.error(f"Room pool registration failed: {e}")
 
-    is_leader = await election.campaign()
-    if is_leader:
-        logger.info("Elected leader, starting game loop")
-        game_loop = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
-        await game_loop.load_state()
-        asyncio.create_task(game_loop.run())
-    else:
-        logger.info("Running as follower")
-        asyncio.create_task(election.start_follower_watch())
+    asyncio.create_task(_campaign_and_start())
 
 
 @app.on_event("shutdown")
