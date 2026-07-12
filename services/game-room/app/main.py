@@ -58,10 +58,20 @@ async def handle_leadership_loss():
     logger.info("Leadership loss cleanup complete")
 
 
+def _run_campaign_in_thread():
+    new_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(new_loop)
+    try:
+        return new_loop.run_until_complete(election.campaign())
+    finally:
+        new_loop.close()
+
+
 async def _campaign_and_start():
     global game_loop
     try:
-        is_leader = await election.campaign()
+        loop = asyncio.get_event_loop()
+        is_leader = await loop.run_in_executor(None, _run_campaign_in_thread)
         if is_leader:
             logger.info("Elected leader, starting game loop")
             game_loop = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
