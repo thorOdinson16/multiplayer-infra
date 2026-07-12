@@ -74,6 +74,7 @@ async def _campaign_and_start():
         is_leader = await loop.run_in_executor(None, _run_campaign_in_thread)
         if is_leader:
             logger.info("Elected leader, starting game loop")
+            election.start_leader_tasks()
             game_loop = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
             await game_loop.load_state()
             asyncio.create_task(game_loop.run())

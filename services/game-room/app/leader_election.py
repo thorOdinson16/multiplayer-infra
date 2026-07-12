@@ -42,8 +42,6 @@ class LeaderElection:
                     address = f"{service_hostname}:8000"
                     self.etcd.put(leader_addr_key, address)
                     mark_in_use(self.match_id)
-                    asyncio.create_task(self._keepalive())
-                    asyncio.create_task(self.watch_for_leadership_loss())
                     logger.info(f"Elected leader for match {self.match_id} on {self.instance_id}")
                     return True
                 else:
@@ -54,6 +52,10 @@ class LeaderElection:
                 logger.error(f"Leader election error: {e}")
                 self.is_leader = False
                 await asyncio.sleep(1)
+
+    def start_leader_tasks(self):
+        asyncio.create_task(self._keepalive())
+        asyncio.create_task(self.watch_for_leadership_loss())
 
     async def _poll_until_key_deleted(self):
         while True:
