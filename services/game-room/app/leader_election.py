@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import etcd3
 from typing import Callable, Optional
 from .config import settings
@@ -37,7 +38,8 @@ class LeaderElection:
                 if success:
                     self.is_leader = True
                     leader_addr_key = f"/match/{self.match_id}/leader-address"
-                    address = f"game-room:{8000}"
+                    service_hostname = os.environ.get("HOSTNAME", "game-room")
+                    address = f"{service_hostname}:8000"
                     self.etcd.put(leader_addr_key, address)
                     mark_in_use(self.match_id)
                     asyncio.create_task(self._keepalive())

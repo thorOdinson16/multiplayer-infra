@@ -359,7 +359,7 @@ class GameLoop:
                     key=self.match_id.encode(),
                     value=json.dumps(telem).encode(),
                 )
-            self.kafka_producer.flush()
+            self.kafka_producer.flush(timeout=5.0)
         except Exception as e:
             logger.error(f"Telemetry publish failed: {e}")
 

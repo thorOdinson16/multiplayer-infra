@@ -2,8 +2,6 @@ import os
 import json
 import time
 import re
-import signal
-import subprocess
 import threading
 import logging
 import etcd3
@@ -39,7 +37,6 @@ def generate_upstream_config(upstreams):
         lines.append("}")
         lines.append("")
     lines.append("map $arg_match_id $game_room_upstream {")
-    lines.append("    default game_room;")
     for match_id, address in sorted(upstreams.items()):
         safe_name = f"game_room_{re.sub(r'[^a-zA-Z0-9_]', '_', match_id)}"
         escaped_id = re.escape(match_id)
@@ -57,8 +54,6 @@ def write_upstream_config(upstreams):
             f.write(content)
         os.rename(tmp_path, conf_path)
         logger.info(f"Wrote upstream config: {len(upstreams)} matches")
-        subprocess.run(["nginx", "-s", "reload"], capture_output=True, timeout=5)
-        logger.info("NGINX reloaded")
     except Exception as e:
         logger.error(f"Failed to update NGINX config: {e}")
 

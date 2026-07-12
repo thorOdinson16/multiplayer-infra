@@ -198,13 +198,24 @@ services:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf
       - ./infra/nginx/conf.d:/etc/nginx/conf.d
       - nginx_certs:/etc/nginx/certs:ro
+    command: >
+      sh -c "nginx -g 'daemon off;' &
+             LAST_HASH=''
+             while true; do
+               sleep 3
+               CURRENT_HASH=$$(find /etc/nginx/conf.d/ -type f -exec md5sum {} \\; | sort | md5sum)
+               if [ \"$$CURRENT_HASH\" != \"$$LAST_HASH\" ]; then
+                 nginx -s reload 2>/dev/null
+                 LAST_HASH=$$CURRENT_HASH
+               fi
+             done"
     depends_on:
       nginx-init:
         condition: service_completed_successfully
       auth:
-        condition: service_started
+        condition: service_healthy
       game-room:
-        condition: service_started
+        condition: service_healthy
 
   etcd-watcher:
     build: services/etcd-watcher
@@ -238,6 +249,12 @@ services:
       - "8001:8000"
     volumes:
       - ./services/auth/keys:/app/keys
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
       couchbase-init:
         condition: service_completed_successfully
@@ -280,6 +297,12 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
     ports:
       - "8003:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -309,6 +332,12 @@ services:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
     ports:
       - "8009:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
     depends_on:
       kafka-init:
         condition: service_completed_successfully
