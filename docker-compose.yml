@@ -293,6 +293,7 @@ services:
       - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
       - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
       - AUTH_SERVICE_URL=http://auth:8000
+      - GRPC_DNS_RESOLVER=native
       - OTEL_SERVICE_NAME=game-room-service
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
     ports:
@@ -328,6 +329,7 @@ services:
       - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
       - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
       - AUTH_SERVICE_URL=http://auth:8000
+      - GRPC_DNS_RESOLVER=native
       - OTEL_SERVICE_NAME=game-room-service-2
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
     ports:

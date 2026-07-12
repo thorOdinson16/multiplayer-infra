@@ -6,7 +6,7 @@ logger = logging.getLogger("room-pool")
 
 
 def get_etcd_client():
-    return etcd3.client(host=settings.etcd_host, port=settings.etcd_port)
+    return etcd3.client(host=settings.etcd_host, port=settings.etcd_port, timeout=5)
 
 
 def register_room(room_id: str):

@@ -12,7 +12,7 @@ logger = logging.getLogger("leader-election")
 class LeaderElection:
     def __init__(self, match_id: str, instance_id: str, ttl: int = 5,
                  on_leadership_lost: Optional[Callable] = None):
-        self.etcd = etcd3.client(host=settings.etcd_host, port=settings.etcd_port)
+        self.etcd = etcd3.client(host=settings.etcd_host, port=settings.etcd_port, timeout=5)
         self.match_id = match_id
         self.key = f"/match/{match_id}/leader"
         self.instance_id = instance_id
