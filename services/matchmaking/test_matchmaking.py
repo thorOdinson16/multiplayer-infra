@@ -1,10 +1,26 @@
-"""Tests for matchmaking service endpoints."""
-import json
-import pytest
+"""Integration tests for the matchmaking service.
+
+These require the docker-compose stack to be running; they are skipped when
+the services cannot be reached (e.g. during the unit-test CI job).
+"""
 import httpx
+import pytest
 
 BASE_URL = "http://localhost:8002"
 AUTH_URL = "http://localhost:8001"
+
+
+def _service_up(url: str) -> bool:
+    try:
+        return httpx.get(f"{url}/health", timeout=2).status_code == 200
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not (_service_up(BASE_URL) and _service_up(AUTH_URL)),
+    reason="matchmaking/auth services not running (integration-only test)",
+)
 
 
 @pytest.fixture(scope="module")

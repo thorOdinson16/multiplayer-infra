@@ -45,6 +45,9 @@ async def websocket_endpoint(websocket: WebSocket, election, game_loop, connecte
     if not election or not election.is_leader:
         await websocket.close(code=4000, reason="Not the leader")
         return
+    if game_loop is None:
+        await websocket.close(code=4003, reason="Game not ready")
+        return
     if mode == "spectator":
         sid = f"spectator-{uuid.uuid4()}"
         connected_spectators[sid] = websocket

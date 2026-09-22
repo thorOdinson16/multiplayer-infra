@@ -11,7 +11,7 @@ from .config import settings
 from .models import MatchRequest
 from .matcher import Matcher
 from .auth_client import validate_token
-from .room_manager import get_available_room
+from .room_manager import claim_available_room, register_room
 from .k8s_client import ensure_game_rooms
 
 app = FastAPI(title="matchmaking-service")
@@ -122,26 +122,39 @@ _pending_lobbies: list[tuple[list, int]] = []  # (lobby, retry_count)
 _MAX_SCALE_RETRIES = 15  # 15 ticks * 2s = 30s before expiring
 
 
-async def _assign_lobby(lobby, room_id):
+async def publish_notification(payload: dict, routing_key: str) -> bool:
     if channel is None:
-        logger.warning("Channel not ready, skipping notification")
-        return
+        logger.warning("Channel not ready, dropping notification")
+        return False
     try:
         exchange = await channel.get_exchange("notifications.exchange")
-        payload = {
-            "event": "match.found",
-            "room_id": room_id,
-            "player_ids": [r.player_id for r in lobby],
-        }
         await exchange.publish(
-            aio_pika.Message(body=json.dumps(payload).encode()),
-            routing_key="match.found",
+            aio_pika.Message(body=json.dumps(payload).encode(), delivery_mode=aio_pika.DeliveryMode.PERSISTENT),
+            routing_key=routing_key,
         )
-        lobbies_assembled.inc()
-        queue_depth.dec(len(lobby))
-        logger.info(f"Match: {len(lobby)} players -> {room_id}")
+        return True
     except Exception as e:
-        logger.warning(f"Failed to publish notification: {e}")
+        logger.warning(f"Failed to publish notification ({routing_key}): {e}")
+        return False
+
+
+async def _assign_lobby(lobby, room_id):
+    payload = {
+        "event": "match.found",
+        "room_id": room_id,
+        "player_ids": [r.player_id for r in lobby],
+    }
+    if not await publish_notification(payload, "match.found"):
+        # Give the room back so another lobby can use it.
+        try:
+            register_room(room_id)
+        except Exception as e:
+            logger.warning(f"Failed to release room {room_id}: {e}")
+        return False
+    lobbies_assembled.inc()
+    queue_depth.dec(len(lobby))
+    logger.info(f"Match: {len(lobby)} players -> {room_id}")
+    return True
 
 
 async def matchmaker_loop():
@@ -149,12 +162,26 @@ async def matchmaker_loop():
     while True:
         await asyncio.sleep(settings.tick_interval_seconds)
         try:
-            # Retry pending lobbies first (rooms created by earlier scale-up)
+            # Expire requests that have waited longer than 2x the window.
+            expired = await matcher.expire_requests(settings.match_timeout_seconds * 2)
+            for req in expired:
+                await publish_notification(
+                    {"event": "match.expired", "player_ids": [req.player_id]},
+                    "match.expired",
+                )
+                expired_count.inc()
+                queue_depth.dec()
+            if expired:
+                logger.info(f"Expired {len(expired)} matchmaking request(s)")
+
+            # Retry pending lobbies first (rooms may have freed up)
             still_pending = []
             for lobby, retry in _pending_lobbies:
-                room_id = get_available_room()
+                room_id = claim_available_room()
                 if room_id:
                     await _assign_lobby(lobby, room_id)
+                    _scale_up_deficit = max(0, _scale_up_deficit - 1)
+                    rooms_needed.set(_scale_up_deficit)
                 elif retry < _MAX_SCALE_RETRIES:
                     still_pending.append((lobby, retry + 1))
                 else:
@@ -167,7 +194,7 @@ async def matchmaker_loop():
             # Match new lobbies
             lobbies = await matcher.match_tick()
             for lobby in lobbies:
-                room_id = get_available_room()
+                room_id = claim_available_room()
                 if room_id:
                     await _assign_lobby(lobby, room_id)
                 else:
@@ -204,7 +231,7 @@ async def metrics():
     return Response(generate_latest(), media_type="text/plain")
 
 
-@app.post("/matchmaking/queue")
+@app.post("/matchmaking/queue", status_code=202)
 async def queue_matchmaking(body: dict):
     token = body.get("token")
     if not token:

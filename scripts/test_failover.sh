@@ -1,92 +1,95 @@
 #!/bin/bash
-# Failover test: kill the game-room leader and verify another replica takes over
-set -e
+# Failover test: kill the game-room leader and verify another replica takes
+# over AND the match resumes (Redis tick keeps advancing).
+set -uo pipefail
+
+MATCH_ID="${MATCH_ID:-test-match-001}"
+REDIS_KEY="match:${MATCH_ID}:state"
+MAX_FAILOVER_SECONDS="${MAX_FAILOVER_SECONDS:-15}"
+
+fail() { echo "FAIL: $1"; exit 1; }
+compose_ps() { docker compose ps -q "$1" 2>/dev/null | head -1; }
+
+ETCD_CONTAINER=$(compose_ps etcd)
+[ -n "$ETCD_CONTAINER" ] || fail "No etcd container found. Is docker compose running?"
+REDIS_CONTAINER=$(compose_ps redis)
+[ -n "$REDIS_CONTAINER" ] || fail "No redis container found."
+
+get_leader() {
+  docker exec "$ETCD_CONTAINER" etcdctl get "/match/${MATCH_ID}/leader" --print-value-only 2>/dev/null | tr -d '\r\n'
+}
+
+get_tick() {
+  local raw
+  raw=$(docker exec "$REDIS_CONTAINER" redis-cli GET "$REDIS_KEY" 2>/dev/null)
+  python3 -c "import sys,json; print(json.loads(sys.argv[1]).get('tick', -1))" "$raw" 2>/dev/null || echo -1
+}
 
 echo "=== Failover Test ==="
 echo ""
 
-# 1. Identify the etcd container and leader
-ETCD_CONTAINER=$(docker ps --filter "label=com.docker.compose.service=etcd" --format "{{.Names}}" | head -1)
-if [ -z "$ETCD_CONTAINER" ]; then
-  echo "ERROR: No etcd container found. Is docker-compose running?"
-  exit 1
-fi
 LEADER_INSTANCE=""
 for i in $(seq 1 30); do
-  LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+  LEADER_INSTANCE=$(get_leader)
   if [ -n "$LEADER_INSTANCE" ]; then
-    echo "  Leader found after ${i}s"
+    echo "  Leader found after ${i}s: $LEADER_INSTANCE"
     break
   fi
   sleep 1
 done
-if [ -z "$LEADER_INSTANCE" ]; then
-  echo "ERROR: No leader found in etcd after 30s. Is the game-room running?"
-  exit 1
-fi
-echo "Leader instance: $LEADER_INSTANCE"
+[ -n "$LEADER_INSTANCE" ] || fail "No leader found in etcd after 30s"
 
-LEADER_CONTAINER=$(docker ps --filter "label=com.docker.compose.service=game-room" --format "{{.Names}}" | head -1)
-if docker ps --filter "name=game-room-2" --format "{{.Names}}" | grep -q .; then
-  SECOND_CONTAINER=$(docker ps --filter "name=game-room-2" --format "{{.Names}}" | head -1)
+ROOM1=$(compose_ps game-room)
+ROOM2=$(compose_ps game-room-2)
+if [ "$LEADER_INSTANCE" = "room-2" ]; then
+  LEADER_CONTAINER="$ROOM2"
+else
+  LEADER_CONTAINER="$ROOM1"
 fi
+[ -n "$LEADER_CONTAINER" ] || fail "Could not determine leader container"
 
-# If leader is room-2 (second replica), swap
-if [ "$LEADER_INSTANCE" = "room-2" ] && [ -n "$SECOND_CONTAINER" ]; then
-  LEADER_CONTAINER="$SECOND_CONTAINER"
-elif [ "$LEADER_INSTANCE" = "room-2" ]; then
-  echo "WARN: leader is room-2 but no game-room-2 container found"
-fi
+restore_leader() {
+  echo "--- Restoring killed replica ---"
+  docker update --restart=unless-stopped "$LEADER_CONTAINER" >/dev/null 2>&1 || true
+  docker start "$LEADER_CONTAINER" >/dev/null 2>&1 || true
+}
+trap restore_leader EXIT
 
-if [ -z "$LEADER_CONTAINER" ]; then
-  echo "ERROR: Could not determine leader container"
-  exit 1
-fi
-
+TICK_BEFORE=$(get_tick)
 echo "Leader container: $LEADER_CONTAINER"
+echo "Tick before failover: $TICK_BEFORE"
 echo ""
 
-# 2. Check match status before failover
-echo "--- Before Failover ---"
-curl -sf http://localhost:8003/health 2>/dev/null && echo "  Game room healthy"
-if [ -n "$SECOND_CONTAINER" ]; then
-  curl -sf http://localhost:8009/health 2>/dev/null && echo "  Game room 2 healthy"
-fi
+echo "--- Killing leader (auto-restart disabled) ---"
+docker update --restart=no "$LEADER_CONTAINER" >/dev/null 2>&1 || true
+docker kill "$LEADER_CONTAINER" >/dev/null 2>&1 || true
 
-# 3. Kill the leader
-echo "--- Killing leader ---"
-docker kill "$LEADER_CONTAINER" 2>/dev/null || true
-echo "  Killed $LEADER_CONTAINER"
-echo ""
-
-# 4. Wait for takeover by remaining replica
-echo "--- Waiting for failover ---"
-for i in $(seq 1 30); do
-  NEW_LEADER=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
-  if [ -n "$NEW_LEADER" ] && [ "$NEW_LEADER" != "$LEADER_INSTANCE" ]; then
-    echo "  New leader: $NEW_LEADER (after ${i}s, etcd=$ETCD_CONTAINER)"
-    break
-  fi
+RECOVERED=false
+for i in $(seq 1 "$MAX_FAILOVER_SECONDS"); do
   sleep 1
+  NEW_LEADER=$(get_leader)
+  if [ -n "$NEW_LEADER" ] && [ "$NEW_LEADER" != "$LEADER_INSTANCE" ]; then
+    echo "  New leader: $NEW_LEADER (after ${i}s)"
+    RECOVERED=true
+    break
+  fi
+  echo "  waiting for new leader... (${i}s)"
 done
+[ "$RECOVERED" = "true" ] || fail "No new leader elected within ${MAX_FAILOVER_SECONDS}s"
 
-# 5. Check health of remaining replica
-echo ""
-echo "--- After Failover ---"
-for i in $(seq 1 10); do
-  STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8003/health 2>/dev/null || echo "down")
-  if [ "$STATUS" = "200" ]; then
-    echo "  Game room recovered (status: $STATUS)"
+echo "--- Verifying match resumed ---"
+RESUMED=false
+for i in $(seq 1 "$MAX_FAILOVER_SECONDS"); do
+  sleep 1
+  TICK_NOW=$(get_tick)
+  if [ "$TICK_NOW" -gt "$TICK_BEFORE" ] 2>/dev/null; then
+    echo "  Match resumed: tick advanced $TICK_BEFORE -> $TICK_NOW"
+    RESUMED=true
     break
   fi
-  STATUS2=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8009/health 2>/dev/null || echo "down")
-  if [ "$STATUS2" = "200" ]; then
-    echo "  Game room 2 recovered (status: $STATUS2)"
-    break
-  fi
-  echo "  Waiting for recovery... ($STATUS / $STATUS2)"
-  sleep 2
+  echo "  waiting for match to resume... (${i}s, tick=$TICK_NOW)"
 done
+[ "$RESUMED" = "true" ] || fail "Match did not resume after failover (tick stuck at $TICK_BEFORE)"
 
 echo ""
 echo "=== Failover Test Complete ==="

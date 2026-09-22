@@ -15,5 +15,5 @@ build/
 venv/
 env/
 *.pem
-!/services/auth/keys/*.pem
+services/auth/keys/
 *output.md

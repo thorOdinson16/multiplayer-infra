@@ -27,6 +27,43 @@ def store_session(session_id: str, session_doc: dict, ttl_seconds: int):
     opts = UpsertOptions(expiry=timedelta(seconds=ttl_seconds))
     coll.upsert(session_id, session_doc, opts)
 
+
+def store_player_session(player_id: str, session_id: str, session_doc: dict, ttl_seconds: int):
+    """Index the player's current session so tokens can be revoked."""
+    coll = get_collection(settings.couchbase_sessions_bucket)
+    opts = UpsertOptions(expiry=timedelta(seconds=ttl_seconds))
+    coll.upsert(f"player_session:{player_id}", {
+        "type": "player_session",
+        "playerId": player_id,
+        "sessionId": session_id,
+        "token": session_doc.get("token"),
+        "expiresAt": session_doc.get("expiresAt"),
+    }, opts)
+
+
+def get_player_session(player_id: str) -> dict | None:
+    coll = get_collection(settings.couchbase_sessions_bucket)
+    try:
+        res = coll.get(f"player_session:{player_id}")
+        return res.content_as[dict]
+    except DocumentNotFoundException:
+        return None
+
+
+def delete_player_session(player_id: str):
+    coll = get_collection(settings.couchbase_sessions_bucket)
+    session = get_player_session(player_id)
+    try:
+        if session and session.get("sessionId"):
+            coll.remove(session["sessionId"])
+    except DocumentNotFoundException:
+        pass
+    try:
+        coll.remove(f"player_session:{player_id}")
+    except DocumentNotFoundException:
+        pass
+
+
 def get_session(session_id: str) -> dict | None:
     coll = get_collection(settings.couchbase_sessions_bucket)
     try:

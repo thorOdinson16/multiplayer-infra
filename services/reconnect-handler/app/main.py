@@ -6,9 +6,13 @@ import redis.asyncio as redis
 import etcd3
 import httpx
 from fastapi import FastAPI, HTTPException
+from starlette.middleware.gzip import GZipMiddleware
 
 app = FastAPI(title="reconnect-handler-service")
+app.add_middleware(GZipMiddleware, minimum_size=512)
 logger = logging.getLogger("reconnect-handler")
+
+MAX_DELTA_BYTES = 64 * 1024
 
 try:
     from opentelemetry import trace
@@ -93,6 +97,9 @@ async def reconnect(body: dict):
             await r.delete(hold_key)
             raise HTTPException(status_code=404, detail="Match ended, hold released")
         raise HTTPException(status_code=404, detail="No state found")
+    is_member = await r.sismember(f"match:{match_id}:players", player_id)
+    if not is_member and not hold_data:
+        raise HTTPException(status_code=403, detail="Player is not part of this match")
     state = json.loads(state_data)
     etcd = get_etcd()
     value, _ = etcd.get(f"/match/{match_id}/leader-address")
@@ -106,6 +113,9 @@ async def reconnect(body: dict):
         "hold_available": hold_data is not None,
         "hold_state": json.loads(hold_data) if hold_data else None,
     }
+    size = len(json.dumps(delta).encode())
+    if size > MAX_DELTA_BYTES:
+        logger.warning(f"Reconnect delta for {player_id} is {size} bytes (limit {MAX_DELTA_BYTES})")
     return delta
 
 

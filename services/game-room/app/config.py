@@ -1,7 +1,8 @@
-import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     # etcd
     etcd_host: str = "localhost"
     etcd_port: int = 2379
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     couchbase_username: str = "Administrator"
     couchbase_password: str = "password"
     couchbase_matches_bucket: str = "matches"
+    couchbase_replays_bucket: str = "replays"
 
     # Game settings
     tick_rate: int = 20
@@ -29,7 +31,8 @@ class Settings(BaseSettings):
     # Auth service URL (for JWT validation)
     auth_service_url: str = "http://localhost:8000"
 
-    class Config:
-        env_file = ".env"
+    # Stable, resolvable address published to etcd as the leader address.
+    # Overridden per replica via the ROOM_ADDRESS environment variable.
+    room_address: str = ""
 
 settings = Settings()

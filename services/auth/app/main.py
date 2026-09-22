@@ -15,7 +15,8 @@ from .models import LoginRequest, RegisterRequest, TokenResponse, ValidateRespon
 from .jwt_handler import create_token, decode_token
 from .couchbase_client import (
     store_session, get_session, delete_session,
-    store_player, get_player_by_username, get_player
+    store_player, get_player_by_username, get_player,
+    store_player_session, get_player_session, delete_player_session
 )
 
 app = FastAPI(title="auth-service")
@@ -64,6 +65,25 @@ async def metrics():
     return Response(generate_latest(), media_type="text/plain")
 
 
+def _issue_session(player_id: str) -> str:
+    """Create a JWT plus its session records (revocable) and return the token."""
+    token = create_token(player_id)
+    now = datetime.now(timezone.utc)
+    session_id = str(uuid.uuid4())
+    session_doc = {
+        "type": "session",
+        "sessionId": session_id,
+        "playerId": player_id,
+        "token": token,
+        "expiresAt": (now + timedelta(minutes=settings.jwt_expire_minutes)).isoformat(),
+        "ipAddress": "0.0.0.0",
+    }
+    ttl = settings.jwt_expire_minutes * 60
+    store_session(session_id, session_doc, ttl)
+    store_player_session(player_id, session_id, session_doc, ttl)
+    return token
+
+
 @app.post("/auth/register", response_model=TokenResponse, status_code=201)
 async def register(req: RegisterRequest):
     register_requests.inc()
@@ -86,18 +106,7 @@ async def register(req: RegisterRequest):
         "lastSeen": now.isoformat(),
     }
     store_player(player_id, player_doc)
-    token = create_token(player_id)
-    session_id = str(uuid.uuid4())
-    session_doc = {
-        "type": "session",
-        "sessionId": session_id,
-        "playerId": player_id,
-        "token": token,
-        "expiresAt": (now + timedelta(minutes=settings.jwt_expire_minutes)).isoformat(),
-        "ipAddress": "0.0.0.0",
-    }
-    store_session(session_id, session_doc, settings.jwt_expire_minutes * 60)
-    return TokenResponse(access_token=token)
+    return TokenResponse(access_token=_issue_session(player_id))
 
 
 @app.post("/auth/login", response_model=TokenResponse)
@@ -106,19 +115,7 @@ async def login(req: LoginRequest):
     player = get_player_by_username(req.username)
     if not player or not bcrypt.checkpw(req.password.encode(), player["passwordHash"].encode()):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token(player["playerId"])
-    now = datetime.now(timezone.utc)
-    session_id = str(uuid.uuid4())
-    session_doc = {
-        "type": "session",
-        "sessionId": session_id,
-        "playerId": player["playerId"],
-        "token": token,
-        "expiresAt": (now + timedelta(minutes=settings.jwt_expire_minutes)).isoformat(),
-        "ipAddress": "0.0.0.0",
-    }
-    store_session(session_id, session_doc, settings.jwt_expire_minutes * 60)
-    return TokenResponse(access_token=token)
+    return TokenResponse(access_token=_issue_session(player["playerId"]))
 
 
 @app.post("/auth/refresh", response_model=TokenResponse)
@@ -128,25 +125,21 @@ async def refresh(credentials: HTTPAuthorizationCredentials = Depends(security))
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     player_id = payload["sub"]
+    session = get_player_session(player_id)
+    if not session or session.get("token") != credentials.credentials:
+        raise HTTPException(status_code=401, detail="Session revoked")
     if not get_player(player_id):
         raise HTTPException(status_code=401, detail="User not found")
-    new_token = create_token(player_id)
-    now = datetime.now(timezone.utc)
-    session_id = str(uuid.uuid4())
-    session_doc = {
-        "type": "session",
-        "sessionId": session_id,
-        "playerId": player_id,
-        "token": new_token,
-        "expiresAt": (now + timedelta(minutes=settings.jwt_expire_minutes)).isoformat(),
-        "ipAddress": "0.0.0.0",
-    }
-    store_session(session_id, session_doc, settings.jwt_expire_minutes * 60)
-    return TokenResponse(access_token=new_token)
+    return TokenResponse(access_token=_issue_session(player_id))
 
 
 @app.post("/auth/logout")
 async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = decode_token(credentials.credentials)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    delete_player_session(payload["sub"])
     return {"detail": "Logged out"}
 
 
@@ -156,7 +149,11 @@ async def validate(credentials: HTTPAuthorizationCredentials = Depends(security)
         payload = decode_token(credentials.credentials)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    return ValidateResponse(player_id=payload["sub"], valid=True)
+    player_id = payload["sub"]
+    session = get_player_session(player_id)
+    if not session or session.get("token") != credentials.credentials:
+        raise HTTPException(status_code=401, detail="Session revoked or expired")
+    return ValidateResponse(player_id=player_id, valid=True)
 
 
 @app.get("/.well-known/jwks.json")
@@ -178,6 +175,9 @@ async def get_player_profile(
         raise HTTPException(status_code=401, detail="Invalid token")
     if payload["sub"] != player_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    session = get_player_session(player_id)
+    if not session or session.get("token") != credentials.credentials:
+        raise HTTPException(status_code=401, detail="Session revoked or expired")
     player = get_player(player_id)
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")

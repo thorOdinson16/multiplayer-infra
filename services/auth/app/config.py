@@ -1,7 +1,9 @@
 import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     # Couchbase
     couchbase_host: str = "localhost"
     couchbase_sessions_bucket: str = "sessions"
@@ -14,8 +16,5 @@ class Settings(BaseSettings):
     jwt_public_key_path: str = os.environ.get("JWT_PUBLIC_KEY_PATH", "public.pem")
     jwt_algorithm: str = "RS256"
     jwt_expire_minutes: int = 24 * 60  # 24 hours
-
-    class Config:
-        env_file = ".env"
 
 settings = Settings()

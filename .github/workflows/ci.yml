@@ -27,7 +27,7 @@ jobs:
           flake8 services/ --count --select=E9,F63,F7,F82 --show-source --statistics
       - name: Check Python syntax
         run: |
-          for f in $(find services/ -name "*.py") scripts/test_ws_helpers.py; do
+          for f in $(find services/ -name "*.py" -not -path "*/env/*" -not -path "*/node_modules/*" -not -path "*/__pycache__/*") scripts/test_ws_helpers.py; do
             python -m py_compile "$f"
           done
 
@@ -83,6 +83,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Start services
@@ -106,25 +107,15 @@ jobs:
             docker compose ps
             exit 1
           fi
-      - name: Debug service logs
-        if: failure()
+      - name: Install Python deps for integration tests
         run: |
-          echo "=== Container Status ==="
-          docker compose ps
-          echo "=== Kafka ==="
-          docker compose logs --tail=20 kafka 2>/dev/null || true
-          echo "=== Couchbase ==="
-          docker compose logs --tail=20 couchbase 2>/dev/null || true
-          echo "=== Auth ==="
-          docker compose logs --tail=20 auth 2>/dev/null || true
-          echo "=== Nginx ==="
-          docker compose logs --tail=20 nginx 2>/dev/null || true
-      - name: Install Python deps for WS tests
-        run: |
-          pip install websockets
+          pip install websockets pytest httpx
       - name: Run E2E test
         run: |
           bash scripts/test_end_to_end.sh
+      - name: Test matchmaking service
+        run: |
+          python -m pytest services/matchmaking/test_matchmaking.py -v --tb=short
       - name: Test failover
         run: |
           bash scripts/test_failover.sh
@@ -137,6 +128,16 @@ jobs:
       - name: Verify telemetry events
         run: |
           bash scripts/test_telemetry.sh
+      - name: Debug service logs
+        if: failure()
+        run: |
+          echo "=== Container Status ==="
+          docker compose ps
+          for svc in kafka couchbase auth nginx game-room game-room-2 matchmaking replay leaderboard analytics notification reconnect-handler etcd-watcher; do
+            echo "=== $svc ==="
+            docker compose logs --tail=40 "$svc" 2>/dev/null || true
+          done
       - name: Cleanup
+        if: always()
         run: |
           docker compose down -v

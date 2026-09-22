@@ -2,9 +2,14 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-const WS_URL = 'ws://localhost:8080/ws';
-const NOTIFY_WS_URL = 'ws://localhost:8080/ws/notifications';
-const HTTP_URL = 'http://localhost:8080';
+// Gateway address. Override with `window.GATEWAY_URL` if the API gateway is
+// not reachable on <hostname>:8080. Scheme follows the page so HTTPS pages
+// get wss/https instead of being blocked as mixed content.
+const GATEWAY_URL = window.GATEWAY_URL || `${window.location.protocol}//${window.location.hostname}:8080`;
+const WS_SCHEME = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const HTTP_URL = GATEWAY_URL;
+const WS_URL = `${WS_SCHEME}://${GATEWAY_URL.replace(/^https?:\/\//, '')}/ws`;
+const NOTIFY_WS_URL = `${WS_SCHEME}://${GATEWAY_URL.replace(/^https?:\/\//, '')}/ws/notifications`;
 
 let token = null;
 let playerId = null;
@@ -115,7 +120,7 @@ function connectNotificationWS() {
 
 function connectGameWS() {
   if (ws) ws.close();
-  ws = new WebSocket(`${WS_URL}?match=${matchId}`);
+  ws = new WebSocket(`${WS_URL}?match_id=${encodeURIComponent(matchId)}`);
   ws.onopen = () => {
     ws.send(JSON.stringify({ token, mode: isSpectator ? 'spectator' : 'player' }));
     connected = true;

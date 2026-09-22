@@ -17,6 +17,12 @@ data:
             '' close;
         }
 
+        map $http_origin $cors_origin {
+            default "";
+            "~^http://localhost(:[0-9]+)?$" $http_origin;
+            "~^http://127\.0\.0\.1(:[0-9]+)?$" $http_origin;
+        }
+
         upstream auth { server auth:8000; }
         upstream matchmaking { server matchmaking:8000; }
         upstream game_room { server game-room:8000; }
@@ -43,6 +49,15 @@ data:
 
             ssl_certificate /etc/nginx/certs/server.crt;
             ssl_certificate_key /etc/nginx/certs/server.key;
+
+            add_header Access-Control-Allow-Origin $cors_origin always;
+            add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS" always;
+            add_header Access-Control-Allow-Headers "Authorization, Content-Type" always;
+            add_header Access-Control-Max-Age 86400 always;
+
+            if ($request_method = OPTIONS) {
+                return 204;
+            }
 
             location /auth/ {
                 limit_req zone=auth_limit burst=20 nodelay;
@@ -123,4 +138,10 @@ data:
                 return 404;
             }
         }
+    }
+  game-room-upstream.conf: |
+    # Default match -> game-room leader routing map. etcd-watcher overwrites
+    # this file in the shared emptyDir once leaders register.
+    map $arg_match_id $game_room_upstream {
+        default game_room;
     }

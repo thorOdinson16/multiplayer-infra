@@ -148,6 +148,8 @@ spec:
               value: "2379"
             - name: NGINX_CONF_DIR
               value: "/etc/nginx/conf.d"
+            - name: DEFAULT_UPSTREAM
+              value: "game_room"
           volumeMounts:
             - name: nginx-conf-d
               mountPath: /etc/nginx/conf.d
@@ -165,9 +167,14 @@ spec:
                 -keyout /etc/nginx/certs/server.key \
                 -out /etc/nginx/certs/server.crt \
                 -subj "/CN=localhost/O=Multiplayer Demo/C=US" 2>/dev/null
+              cp /config-default/game-room-upstream.conf /etc/nginx/conf.d/game-room-upstream.conf
           volumeMounts:
             - name: nginx-certs
               mountPath: /etc/nginx/certs
+            - name: nginx-conf-d
+              mountPath: /etc/nginx/conf.d
+            - name: nginx-config
+              mountPath: /config-default
       volumes:
         - name: nginx-config
           configMap:

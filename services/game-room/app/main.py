@@ -1,8 +1,6 @@
 import asyncio
-import json
 import logging
 import os
-import time
 import uuid
 import redis.asyncio as redis
 from confluent_kafka import Producer
@@ -12,12 +10,11 @@ from prometheus_client import generate_latest
 
 from .config import settings
 from .leader_election import LeaderElection
-from .models import GameState, PlayerState
 from .game_loop import GameLoop
 from .ws_handler import websocket_endpoint
 
 app = FastAPI(title="game-room-service")
-logger = logging.getLogger("game-room")
+logger = logging.getLogger("uvicorn.error")
 
 try:
     from lib.python.common.tracing import setup_opentelemetry, instrument_fastapi
@@ -37,10 +34,12 @@ connected_players = {}
 connected_spectators = {}
 
 
-async def handle_leadership_loss():
+async def handle_leadership_lost():
+    global game_loop
     logger.warning("Leadership lost - stopping game loop and dropping connections")
     if game_loop:
-        game_loop.running = False
+        await game_loop.stop()
+        game_loop = None
     for pid, ws in list(connected_players.items()):
         try:
             await ws.send_json({"type": "leader_changed", "reason": "failover"})
@@ -58,31 +57,15 @@ async def handle_leadership_loss():
     logger.info("Leadership loss cleanup complete")
 
 
-def _run_campaign_in_thread():
-    new_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(new_loop)
-    try:
-        return new_loop.run_until_complete(election.campaign())
-    finally:
-        new_loop.close()
-
-
-async def _campaign_and_start():
+async def handle_leadership_gained():
     global game_loop
-    try:
-        loop = asyncio.get_event_loop()
-        is_leader = await loop.run_in_executor(None, _run_campaign_in_thread)
-        if is_leader:
-            logger.info("Elected leader, starting game loop")
-            election.start_leader_tasks()
-            game_loop = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
-            await game_loop.load_state()
-            asyncio.create_task(game_loop.run())
-        else:
-            logger.info("Running as follower")
-            asyncio.create_task(election.start_follower_watch())
-    except Exception as e:
-        logger.error("Campaign failed", exc_info=True)
+    logger.info("Promoted to leader, starting game loop")
+    if game_loop and game_loop.running:
+        logger.warning("Game loop already running, not starting another")
+        return
+    game_loop = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
+    await game_loop.load_state()
+    asyncio.create_task(game_loop.run())
 
 
 @app.on_event("startup")
@@ -93,7 +76,6 @@ async def startup():
     logger.info(f"Starting game room for match {match_id}, instance {instance_id}")
     redis_client = redis.Redis(host=settings.redis_host, port=settings.redis_port, decode_responses=True)
     kafka_producer = Producer({'bootstrap.servers': settings.kafka_bootstrap_servers, 'acks': 'all'})
-    election = LeaderElection(match_id, instance_id, on_leadership_lost=handle_leadership_loss)
 
     try:
         from .room_pool import register_room
@@ -102,7 +84,15 @@ async def startup():
     except Exception as e:
         logger.error(f"Room pool registration failed: {e}")
 
-    asyncio.create_task(_campaign_and_start())
+    loop = asyncio.get_event_loop()
+    election = LeaderElection(
+        match_id,
+        instance_id,
+        on_elected=handle_leadership_gained,
+        on_lost=handle_leadership_lost,
+        loop=loop,
+    )
+    election.start()
 
 
 @app.on_event("shutdown")
@@ -110,7 +100,7 @@ async def shutdown():
     if game_loop:
         await game_loop.stop()
     if election:
-        await election.step_down()
+        await asyncio.get_event_loop().run_in_executor(None, election.step_down)
     if kafka_producer:
         kafka_producer.flush()
 
@@ -134,11 +124,10 @@ async def ready():
         checks["kafka"] = "ok"
     except Exception as e:
         checks["kafka"] = f"error: {e}"
-    try:
-        election.etcd.get("/health")
+    if election is not None and election.etcd_ok:
         checks["etcd"] = "ok"
-    except Exception as e:
-        checks["etcd"] = f"error: {e}"
+    else:
+        checks["etcd"] = "error: etcd unreachable"
     all_ok = all(v == "ok" for v in checks.values())
     if not all_ok:
         raise HTTPException(status_code=503, detail=f"Not ready: {checks}")

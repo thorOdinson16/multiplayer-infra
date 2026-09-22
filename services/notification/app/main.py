@@ -67,11 +67,9 @@ async def consume_notifications():
                         body = json.loads(message.body.decode())
                         event_type = body.get("event", "unknown")
                         player_ids = body.get("player_ids", [])
-                        routing_key = message.routing_key if hasattr(message, 'routing_key') else "unknown"
-                        if routing_key == "match.expired":
-                            logger.info(f"Expired matchmaking request (dead-lettered)")
+                        if event_type == "match.expired":
+                            logger.info("Expired matchmaking request")
                             expired_count.inc()
-                            continue
                         logger.info(f"Notification: {event_type} for {player_ids}")
                         await dispatch(event_type, player_ids, body)
         except Exception as e:

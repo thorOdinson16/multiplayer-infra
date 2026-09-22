@@ -1,8 +1,12 @@
-import requests
 import os
 
-HOST = os.environ.get("RABBITMQ_HOST", "rabbitmq") + ":15672"
-AUTH = ("guest", "guest")
+import requests
+
+HOST = os.environ.get("RABBITMQ_HOST", "rabbitmq") + ":" + os.environ.get("RABBITMQ_MGMT_PORT", "15672")
+USER = os.environ.get("RABBITMQ_USER", "guest")
+PASSWORD = os.environ.get("RABBITMQ_PASS", "guest")
+AUTH = (USER, PASSWORD)
+
 
 def put(url, json):
     r = requests.put(f"http://{HOST}/api/{url}", auth=AUTH, json=json)

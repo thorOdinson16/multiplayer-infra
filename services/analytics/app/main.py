@@ -55,16 +55,18 @@ def consume_telemetry():
                     movement_events.inc()
                 elif event_type == "kill":
                     kill_events.inc()
+                elif event_type == "match_start":
+                    active_matches.inc()
+                elif event_type == "match_end":
+                    active_matches.set(0)
                 elif event_type == "session_start":
                     active_sessions[event.get("player_id")] = time.time()
                     total_players.inc()
-                    active_matches.inc()
                 elif event_type == "session_end":
                     pid = event.get("player_id")
                     if pid in active_sessions:
                         dur = time.time() - active_sessions.pop(pid)
                         session_duration.observe(dur)
-                    active_matches.dec()
             except Exception as e:
                 logger.error(f"Telemetry error: {e}")
         time.sleep(0.1)

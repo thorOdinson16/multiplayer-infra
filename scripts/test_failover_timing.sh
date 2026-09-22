@@ -1,77 +1,73 @@
 #!/bin/bash
 # Failover timing test: measure leader election latency (SLA: 8s)
-set -e
+set -uo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8080}"
-MAX_FAILOVER_SECONDS="${MAX_FAILOVER_SECONDS:-8}"
 MATCH_ID="${MATCH_ID:-test-match-001}"
+MAX_FAILOVER_SECONDS="${MAX_FAILOVER_SECONDS:-8}"
+REDIS_KEY="match:${MATCH_ID}:state"
+
+fail() { echo "FAIL: $1"; exit 1; }
+compose_ps() { docker compose ps -q "$1" 2>/dev/null | head -1; }
 
 echo "=== Failover Timing Test ==="
 echo "SLA: a live replica assumes leadership within ${MAX_FAILOVER_SECONDS}s"
 echo ""
 
-# 1. Identify the etcd container and leader
-ETCD_CONTAINER=$(docker ps --filter "label=com.docker.compose.service=etcd" --format "{{.Names}}" | head -1)
-if [ -z "$ETCD_CONTAINER" ]; then
-  echo "FAIL: No etcd container found. Is docker-compose running?"
-  exit 1
-fi
+ETCD_CONTAINER=$(compose_ps etcd)
+[ -n "$ETCD_CONTAINER" ] || fail "No etcd container found. Is docker compose running?"
+REDIS_CONTAINER=$(compose_ps redis)
+[ -n "$REDIS_CONTAINER" ] || fail "No redis container found."
+
+get_leader() {
+  docker exec "$ETCD_CONTAINER" etcdctl get "/match/${MATCH_ID}/leader" --print-value-only 2>/dev/null | tr -d '\r\n'
+}
+
+get_tick() {
+  local raw
+  raw=$(docker exec "$REDIS_CONTAINER" redis-cli GET "$REDIS_KEY" 2>/dev/null)
+  python3 -c "import sys,json; print(json.loads(sys.argv[1]).get('tick', -1))" "$raw" 2>/dev/null || echo -1
+}
+
 LEADER_INSTANCE=""
 for i in $(seq 1 30); do
-  LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
+  LEADER_INSTANCE=$(get_leader)
   if [ -n "$LEADER_INSTANCE" ]; then
     break
   fi
   sleep 1
 done
-if [ -z "$LEADER_INSTANCE" ]; then
-  echo "FAIL: No leader found in etcd after 30s. Is the game-room running?"
-  exit 1
-fi
+[ -n "$LEADER_INSTANCE" ] || fail "No leader found in etcd after 30s"
 
-LEADER_CONTAINER=$(docker ps --filter "label=com.docker.compose.service=game-room" --format "{{.Names}}" | head -1)
-if docker ps --filter "name=game-room-2" --format "{{.Names}}" | grep -q .; then
-  SECOND_CONTAINER=$(docker ps --filter "name=game-room-2" --format "{{.Names}}" | head -1)
-fi
+ROOM1=$(compose_ps game-room)
+ROOM2=$(compose_ps game-room-2)
+if [ "$LEADER_INSTANCE" = "room-2" ]; then LEADER_CONTAINER="$ROOM2"; else LEADER_CONTAINER="$ROOM1"; fi
+[ -n "$LEADER_CONTAINER" ] || fail "Could not determine leader container"
 
-if [ "$LEADER_INSTANCE" = "room-2" ] && [ -n "$SECOND_CONTAINER" ]; then
-  LEADER_CONTAINER="$SECOND_CONTAINER"
-fi
+restore_leader() {
+  echo "--- Restoring killed replica ---"
+  docker update --restart=unless-stopped "$LEADER_CONTAINER" >/dev/null 2>&1 || true
+  docker start "$LEADER_CONTAINER" >/dev/null 2>&1 || true
+}
+trap restore_leader EXIT
 
-if [ -z "$LEADER_CONTAINER" ]; then
-  echo "FAIL: Could not determine leader container"
-  exit 1
-fi
-
-FOLLOWER_CONTAINER=""
-if [ "$LEADER_CONTAINER" = "$(docker ps --filter "name=game-room-2" --format "{{.Names}}" | head -1)" ]; then
-  FOLLOWER_CONTAINER=$(docker ps --filter "label=com.docker.compose.service=game-room" --format "{{.Names}}" | head -1)
-else
-  FOLLOWER_CONTAINER=$(docker ps --filter "name=game-room-2" --format "{{.Names}}" | head -1)
-fi
-
+TICK_BEFORE=$(get_tick)
 echo "Leader: $LEADER_CONTAINER ($LEADER_INSTANCE)"
-echo "Follower: $FOLLOWER_CONTAINER"
+echo "Tick before failover: $TICK_BEFORE"
 
-# 2. Verify the follower is healthy
-HEALTH=$(curl -sfk "$BASE_URL/health" 2>/dev/null || echo "down")
-echo "Health before failover: $HEALTH"
-
-# 3. Record start time and kill leader
 START=$(date +%s.%N)
-echo "Killing leader ($LEADER_CONTAINER) at $(date)"
-docker kill "$LEADER_CONTAINER" >/dev/null 2>&1
+echo "Killing leader (auto-restart disabled) at $(date)"
+docker update --restart=no "$LEADER_CONTAINER" >/dev/null 2>&1 || true
+docker kill "$LEADER_CONTAINER" >/dev/null 2>&1 || true
 
-# 4. Poll etcd until a new leader is elected (must be the follower or a replacement)
 RECOVERED=false
 for i in $(seq 1 "$MAX_FAILOVER_SECONDS"); do
   sleep 1
-  NEW_LEADER_INSTANCE=$(docker exec "$ETCD_CONTAINER" etcdctl get /match/test-match-001/leader --print-value-only 2>/dev/null || echo "")
-  if [ -n "$NEW_LEADER_INSTANCE" ] && [ "$NEW_LEADER_INSTANCE" != "$LEADER_INSTANCE" ]; then
+  NEW_LEADER=$(get_leader)
+  if [ -n "$NEW_LEADER" ] && [ "$NEW_LEADER" != "$LEADER_INSTANCE" ]; then
     END=$(date +%s.%N)
-    RECOVERED=true
     DURATION=$(python3 -c "print(f'{max(0, $END - $START):.2f}')" 2>/dev/null)
-    echo "New leader elected: $NEW_LEADER_INSTANCE after ${DURATION}s"
+    echo "New leader elected: $NEW_LEADER after ${DURATION}s"
+    RECOVERED=true
     break
   fi
   echo "  waiting for new leader... (${i}s)"
@@ -80,16 +76,24 @@ done
 if [ "$RECOVERED" != "true" ]; then
   END=$(date +%s.%N)
   DURATION=$(python3 -c "print(f'{max(0, $END - $START):.2f}')" 2>/dev/null)
-  echo "FAIL: No new leader elected within ${MAX_FAILOVER_SECONDS}s (took ${DURATION}s)"
-  exit 1
+  fail "No new leader elected within ${MAX_FAILOVER_SECONDS}s (took ${DURATION}s)"
 fi
 
-# 5. Verify failover within SLA
+# Confirm the match actually resumed on the new leader.
+RESUMED=false
+for i in $(seq 1 "$MAX_FAILOVER_SECONDS"); do
+  sleep 1
+  TICK_NOW=$(get_tick)
+  if [ "$TICK_NOW" -gt "$TICK_BEFORE" ] 2>/dev/null; then
+    echo "Match resumed: tick $TICK_BEFORE -> $TICK_NOW"
+    RESUMED=true
+    break
+  fi
+done
+[ "$RESUMED" = "true" ] || fail "Match did not resume after failover (tick stuck at $TICK_BEFORE)"
+
 SLA_OK=$(python3 -c "print('true' if float('$DURATION') <= $MAX_FAILOVER_SECONDS else 'false')" 2>/dev/null)
-if [ "$SLA_OK" != "true" ]; then
-  echo "FAIL: Failover took ${DURATION}s which exceeds SLA of ${MAX_FAILOVER_SECONDS}s"
-  exit 1
-fi
+[ "$SLA_OK" = "true" ] || fail "Failover took ${DURATION}s which exceeds SLA of ${MAX_FAILOVER_SECONDS}s"
 
 echo ""
-echo "PASS: Failover completed in ${DURATION}s (SLA: ${MAX_FAILOVER_SECONDS}s)"
+echo "PASS: Failover completed in ${DURATION}s (SLA: ${MAX_FAILOVER_SECONDS}s) and match resumed"

@@ -1,8 +1,9 @@
 import asyncio
 import json
 import logging
+import threading
 import time
-from confluent_kafka import Consumer, KafkaException
+from confluent_kafka import Consumer, KafkaException, TopicPartition
 from prometheus_client import Gauge, Counter, Histogram
 
 from .config import settings
@@ -14,6 +15,54 @@ logger = logging.getLogger("game-room")
 active_matches = Gauge("gameroom_active_matches", "Number of active matches", ["match_id"])
 tick_latency = Histogram("gameroom_tick_latency_seconds", "Tick processing latency", buckets=[0.01, 0.025, 0.05, 0.1, 0.25])
 state_broadcasts = Counter("gameroom_state_broadcasts_total", "Total state broadcasts")
+kills_total = Counter("gameroom_kills_total", "Total kills")
+elections_total = Counter("gameroom_elections_total", "Total times this instance became leader")
+
+
+class AsyncKafkaProducer:
+    """Non-blocking Kafka producer wrapper.
+
+    A background thread drives ``poll()`` so the asyncio loop never blocks on
+    delivery callbacks, while callers can still await per-message delivery
+    acknowledgement (needed for the Kafka-first commit ordering, ADR-08).
+    """
+
+    def __init__(self, producer, loop):
+        self.producer = producer
+        self.loop = loop
+        self._running = True
+        self._thread = threading.Thread(target=self._poll_loop, name="kafka-poller", daemon=True)
+        self._thread.start()
+
+    def _poll_loop(self):
+        while self._running:
+            try:
+                self.producer.poll(0.1)
+            except Exception:
+                time.sleep(0.05)
+
+    async def publish(self, topic, key, value):
+        future = self.loop.create_future()
+
+        def _callback(err, msg):
+            if err:
+                self.loop.call_soon_threadsafe(future.set_exception, RuntimeError(str(err)))
+            else:
+                self.loop.call_soon_threadsafe(future.set_result, msg)
+
+        try:
+            self.producer.produce(topic, key=key, value=value, callback=_callback)
+        except BufferError:
+            await asyncio.sleep(0.01)
+            self.producer.produce(topic, key=key, value=value, callback=_callback)
+        return await future
+
+    def stop(self):
+        self._running = False
+        try:
+            self.producer.flush(timeout=5.0)
+        except Exception:
+            pass
 
 
 class GameLoop:
@@ -22,6 +71,7 @@ class GameLoop:
         self.state = GameState(match_id=match_id)
         self.redis = r
         self.kafka_producer = kafka_producer
+        self.kafka = AsyncKafkaProducer(kafka_producer, asyncio.get_event_loop())
         self.tick_rate = settings.tick_rate
         self.running = False
         self.input_queue = asyncio.Queue()
@@ -31,7 +81,12 @@ class GameLoop:
         self.match_ended = False
         self._connected_players = connected_players
         self._connected_spectators = connected_spectators
+        self._telemetry_tasks = set()
+        self._pending_telemetry = []
 
+    # ------------------------------------------------------------------ #
+    # state loading
+    # ------------------------------------------------------------------ #
     async def load_state(self):
         redis_state_key = f"match:{self.match_id}:state"
         redis_offset_key = f"match:{self.match_id}:last_offset"
@@ -52,10 +107,8 @@ class GameLoop:
             from couchbase.options import ClusterOptions
             auth = PasswordAuthenticator(settings.couchbase_username, settings.couchbase_password)
             cluster = Cluster(f"couchbase://{settings.couchbase_host}", ClusterOptions(auth))
-            bucket = cluster.bucket(settings.couchbase_matches_bucket)
-            coll = bucket.default_collection()
             query = (
-                f"SELECT tick, events FROM {settings.couchbase_matches_bucket} "
+                f"SELECT tick, events FROM {settings.couchbase_replays_bucket} "
                 f"WHERE type = 'replay_checkpoint' AND matchId = $match_id "
                 f"ORDER BY tick DESC LIMIT 1"
             )
@@ -81,35 +134,46 @@ class GameLoop:
             'enable.auto.commit': False,
         }
         consumer = Consumer(consumer_conf)
-        consumer.subscribe([settings.kafka_topic_events])
         try:
-            last_offset = -1
-            target_offset = -1
-            topic_metadata = consumer.list_topics(settings.kafka_topic_events, timeout=5)
-            if topic_metadata.topics.get(settings.kafka_topic_events):
-                partitions = topic_metadata.topics[settings.kafka_topic_events].partitions
-                if partitions:
-                    partition = list(partitions.values())[0]
-                    low, high = consumer.get_watermark_offsets(partition)
-                    target_offset = high - 1 if high > 0 else -1
-                    logger.info(f"Replay target: low={low}, high={high}, target_offset={target_offset}")
-            while True:
+            metadata = consumer.list_topics(settings.kafka_topic_events, timeout=5)
+            topic = metadata.topics.get(settings.kafka_topic_events)
+            if topic is None or not topic.partitions:
+                logger.warning("No partitions for events topic; skipping cold-start replay")
+                return
+            targets = {}
+            assignments = []
+            for partition in topic.partitions:
+                tp = TopicPartition(settings.kafka_topic_events, partition)
+                low, high = consumer.get_watermark_offsets(tp, timeout=5.0)
+                targets[(tp.topic, tp.partition)] = high
+                assignments.append(TopicPartition(tp.topic, tp.partition, low))
+
+            consumer.assign(assignments)
+
+            remaining = {key for key, end in targets.items() if end > 0}
+
+            logger.info(f"Cold-start replay targets: {targets}")
+            max_offset = -1
+            deadline = time.time() + 60
+            while remaining and time.time() < deadline:
                 msg = consumer.poll(1.0)
                 if msg is None:
-                    break
+                    continue
                 if msg.error():
                     raise KafkaException(msg.error())
                 event = json.loads(msg.value().decode())
                 event_tick = event.get("tick", 0)
                 if checkpoint_tick is None or event_tick > checkpoint_tick:
                     self._apply_event(event)
-                last_offset = msg.offset()
-                if target_offset >= 0 and last_offset >= target_offset:
-                    logger.info(f"Reached target offset {target_offset}")
-                    break
-            if last_offset >= 0:
-                self.last_committed_kafka_offset = last_offset
-                logger.info(f"Cold-start replay complete at offset {last_offset}, tick {self.state.tick}")
+                max_offset = max(max_offset, msg.offset())
+                partition = (msg.topic(), msg.partition())
+                if msg.offset() + 1 >= targets.get(partition, 0):
+                    remaining.discard(partition)
+            if max_offset >= 0:
+                self.last_committed_kafka_offset = max_offset
+                logger.info(f"Cold-start replay complete at offset {max_offset}, tick {self.state.tick}")
+            else:
+                logger.info("Cold-start replay found no events")
         finally:
             consumer.close()
 
@@ -125,6 +189,9 @@ class GameLoop:
                 self.state.players[pid].connected = pdata.get("connected", True)
             self.state.tick = max(self.state.tick, event.get("tick", 0))
 
+    # ------------------------------------------------------------------ #
+    # players
+    # ------------------------------------------------------------------ #
     async def enqueue_input(self, player_id, input_data):
         await self.input_queue.put((player_id, input_data))
 
@@ -146,11 +213,13 @@ class GameLoop:
                 pass
         if player_id not in self.state.players:
             self.state.players[player_id] = PlayerState(player_id=player_id)
+            self._pending_telemetry.append({"type": "session_start", "player_id": player_id})
         self.state.players[player_id].connected = True
 
     async def remove_player(self, player_id):
         if player_id in self.state.players:
             self.state.players[player_id].connected = False
+            self._pending_telemetry.append({"type": "session_end", "player_id": player_id})
             hold_key = f"hold:{self.match_id}:{player_id}"
             hold_value = json.dumps({
                 "x": self.state.players[player_id].x,
@@ -161,6 +230,9 @@ class GameLoop:
             await self.redis.setex(hold_key, settings.player_slot_hold_seconds, hold_value)
             logger.info(f"Player {player_id} hold slot reserved for {settings.player_slot_hold_seconds}s")
 
+    # ------------------------------------------------------------------ #
+    # broadcast
+    # ------------------------------------------------------------------ #
     async def broadcast_to_players(self, state_snapshot):
         dead = []
         for pid, ws in self._connected_players.items():
@@ -182,10 +254,15 @@ class GameLoop:
         for sid in dead:
             self._connected_spectators.pop(sid, None)
 
+    # ------------------------------------------------------------------ #
+    # main loop
+    # ------------------------------------------------------------------ #
     async def run(self):
         self.running = True
         tick_delay = 1.0 / self.tick_rate
         active_matches.labels(match_id=self.match_id).set(1)
+        elections_total.inc()
+        await self._publish_event(settings.kafka_topic_telemetry, {"type": "match_start", "tick": self.state.tick})
         while self.running and not self.match_ended:
             start = asyncio.get_event_loop().time()
             await self._process_tick()
@@ -225,7 +302,7 @@ class GameLoop:
         }
         event = {"match_id": self.match_id, "tick": next_tick, "players": state_snapshot["players"]}
 
-        kafka_ok = await self._publish_to_kafka(event)
+        kafka_ok = await self._publish_event(settings.kafka_topic_events, event, track_offset=True)
         if not kafka_ok:
             logger.error("Kafka publish failed, state NOT advanced")
             return
@@ -241,7 +318,7 @@ class GameLoop:
             else:
                 self.state.players[pid] = p
 
-        self._publish_telemetry(state_snapshot)
+        self._schedule_telemetry(state_snapshot)
         self.spectator_buffer.append(next_tick, state_snapshot)
         await self._update_redis()
         asyncio.create_task(self.broadcast_to_players(state_snapshot))
@@ -266,6 +343,13 @@ class GameLoop:
             if nearest:
                 nearest.health -= 10
                 player.score += 10
+                if nearest.health <= 0:
+                    kills_total.inc()
+                    self._pending_telemetry.append({
+                        "type": "kill",
+                        "killer": player_id,
+                        "victim": nearest.player_id,
+                    })
 
     def _find_nearest_enemy_in(self, player_id, players_dict):
         player = players_dict.get(player_id)
@@ -282,92 +366,38 @@ class GameLoop:
                 nearest = p
         return nearest if nearest_dist < 200 else None
 
-    def _apply_input(self, player_id, input_data):
-        if player_id not in self.state.players:
-            self.state.players[player_id] = PlayerState(player_id=player_id)
-        player = self.state.players[player_id]
-        dx = input_data.get("dx", 0)
-        dy = input_data.get("dy", 0)
-        speed = input_data.get("speed", 5)
-        player.x += dx * speed
-        player.y += dy * speed
-        player.x = max(-500, min(500, player.x))
-        player.y = max(-500, min(500, player.y))
-        if input_data.get("shoot"):
-            nearest = self._find_nearest_enemy(player_id)
-            if nearest:
-                nearest.health -= 10
-                player.score += 10
-
-    def _find_nearest_enemy(self, player_id):
-        player = self.state.players.get(player_id)
-        if not player:
-            return None
-        nearest = None
-        nearest_dist = float("inf")
-        for pid, p in self.state.players.items():
-            if pid == player_id or not p.connected:
-                continue
-            dist = ((p.x - player.x) ** 2 + (p.y - player.y) ** 2) ** 0.5
-            if dist < nearest_dist:
-                nearest_dist = dist
-                nearest = p
-        return nearest if nearest_dist < 200 else None
-
-    async def _publish_to_kafka(self, event):
-        delivery_result = {"error": None}
-
-        def callback(err, msg):
-            if err:
-                delivery_result["error"] = str(err)
-                logger.error(f"Kafka delivery error: {err}")
-            else:
-                self.last_committed_kafka_offset = msg.offset()
-
+    # ------------------------------------------------------------------ #
+    # kafka
+    # ------------------------------------------------------------------ #
+    async def _publish_event(self, topic, payload, track_offset=False):
+        """Publish a single event and await delivery acknowledgement."""
         try:
-            self.kafka_producer.produce(
-                settings.kafka_topic_events,
-                key=self.match_id.encode(),
-                value=json.dumps(event).encode(),
-                callback=callback,
-            )
-            self.kafka_producer.flush(timeout=5.0)
-            if delivery_result["error"]:
-                return False
+            msg = await self.kafka.publish(topic, self.match_id.encode(), json.dumps(payload).encode())
+            if track_offset:
+                self.last_committed_kafka_offset = msg.offset()
             return True
         except Exception as e:
-            logger.error(f"Kafka publish failed: {e}")
+            logger.error(f"Kafka publish to {topic} failed: {e}")
             return False
 
-    def _publish_telemetry(self, state_snapshot):
-        try:
-            for pid, pdata in state_snapshot["players"].items():
-                telem = {
-                    "match_id": self.match_id,
-                    "tick": state_snapshot["tick"],
-                    "type": "move",
-                    "player_id": pid,
-                    "x": pdata["x"],
-                    "y": pdata["y"],
-                    "health": pdata["health"],
-                    "score": pdata["score"],
-                    "connected": pdata["connected"],
-                    "timestamp": time.time(),
-                }
-                self.kafka_producer.produce(
-                    settings.kafka_topic_telemetry,
-                    key=self.match_id.encode(),
-                    value=json.dumps(telem).encode(),
-                )
-            self.kafka_producer.flush(timeout=5.0)
-        except Exception as e:
-            logger.error(f"Telemetry publish failed: {e}")
-
-    def _kafka_delivery_callback(self, err, msg):
-        if err:
-            logger.error(f"Kafka delivery error: {err}")
-        else:
-            self.last_committed_kafka_offset = msg.offset()
+    def _schedule_telemetry(self, state_snapshot):
+        tick = state_snapshot["tick"]
+        for pid, pdata in state_snapshot["players"].items():
+            self._pending_telemetry.append({
+                "type": "move",
+                "player_id": pid,
+                "x": pdata["x"],
+                "y": pdata["y"],
+                "health": pdata["health"],
+                "score": pdata["score"],
+                "connected": pdata["connected"],
+            })
+        events, self._pending_telemetry = self._pending_telemetry, []
+        for telem in events:
+            telem.update({"match_id": self.match_id, "tick": tick, "timestamp": time.time()})
+            task = asyncio.create_task(self._publish_event(settings.kafka_topic_telemetry, telem))
+            self._telemetry_tasks.add(task)
+            task.add_done_callback(self._telemetry_tasks.discard)
 
     async def _update_redis(self):
         state_key = f"match:{self.match_id}:state"
@@ -409,11 +439,20 @@ class GameLoop:
             "outcome": outcome, "players": list(self.state.players.keys()),
             "started_at": self.state.started_at, "duration_seconds": time.time() - self.state.started_at,
         }
+        await self._publish_event(settings.kafka_topic_lifecycle, lifecycle_event)
+        await self._publish_event(settings.kafka_topic_telemetry, {"type": "match_end", "tick": self.state.tick})
+        await self._write_match_to_couchbase(outcome)
+
         try:
-            self.kafka_producer.produce(settings.kafka_topic_lifecycle, key=self.match_id.encode(), value=json.dumps(lifecycle_event).encode())
-            self.kafka_producer.flush()
+            from .room_pool import register_room
+            register_room(self.match_id)
+            logger.info(f"Room {self.match_id} returned to pool")
         except Exception as e:
-            logger.error(f"Lifecycle event failed: {e}")
+            logger.error(f"Room pool return failed: {e}")
+
+        active_matches.labels(match_id=self.match_id).set(0)
+
+    async def _write_match_to_couchbase(self, outcome):
         try:
             from couchbase.cluster import Cluster
             from couchbase.auth import PasswordAuthenticator
@@ -433,16 +472,7 @@ class GameLoop:
         except Exception as e:
             logger.error(f"Couchbase match write failed: {e}")
 
-        try:
-            from .room_pool import register_room
-            register_room(self.match_id)
-            logger.info(f"Room {self.match_id} returned to pool")
-        except Exception as e:
-            logger.error(f"Room pool return failed: {e}")
-
-        active_matches.labels(match_id=self.match_id).set(0)
-
     async def stop(self):
         self.running = False
         self.match_ended = True
-        self.kafka_producer.flush()
+        self.kafka.stop()

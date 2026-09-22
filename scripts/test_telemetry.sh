@@ -2,9 +2,9 @@
 # Telemetry verification test: verify state events flow through Kafka
 set -e
 
-KAFKA_TOPIC_EVENTS="${KAFKA_TOPIC_EVENTS:-game-events}"
-KAFKA_TOPIC_TELEMETRY="${KAFKA_TOPIC_TELEMETRY:-game-telemetry}"
-KAFKA_TOPIC_LIFECYCLE="${KAFKA_TOPIC_LIFECYCLE:-match-lifecycle}"
+KAFKA_TOPIC_EVENTS="${KAFKA_TOPIC_EVENTS:-match.events}"
+KAFKA_TOPIC_TELEMETRY="${KAFKA_TOPIC_TELEMETRY:-match.telemetry}"
+KAFKA_TOPIC_LIFECYCLE="${KAFKA_TOPIC_LIFECYCLE:-match.lifecycle}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-multiplayer-infra-kafka-1}"
 BOOTSTRAP="${BOOTSTRAP:-localhost:9092}"
 

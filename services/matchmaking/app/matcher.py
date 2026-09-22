@@ -12,6 +12,16 @@ class Matcher:
         async with self.lock:
             self.pending.append(req)
 
+    async def expire_requests(self, max_age_seconds: float) -> list[MatchRequest]:
+        """Remove and return requests that have waited longer than max_age_seconds."""
+        async with self.lock:
+            now = time.time()
+            expired = [r for r in self.pending if now - r.timestamp > max_age_seconds]
+            if expired:
+                expired_ids = {id(r) for r in expired}
+                self.pending = [r for r in self.pending if id(r) not in expired_ids]
+            return expired
+
     async def match_tick(self) -> list[list[MatchRequest]]:
         async with self.lock:
             lobbies = []
