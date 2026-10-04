@@ -111,7 +111,7 @@ services:
     command: ["sh", "-c", "pip install -q requests && python init.py"]
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
