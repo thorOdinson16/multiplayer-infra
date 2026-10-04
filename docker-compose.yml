@@ -111,8 +111,9 @@ services:
     command: ["sh", "-c", "pip install -q requests && python init.py"]
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
-    command: server /data --console-address ":9001"
+    # Docker Hub minio/minio and quay.io/minio/minio are no longer published;
+    # the Bitnami legacy archive is the pullable image that still runs MinIO.
+    image: bitnamilegacy/minio:latest
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -120,7 +121,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
-      - minio_data:/data
+      - minio_data:/bitnami/minio/data
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
       interval: 10s

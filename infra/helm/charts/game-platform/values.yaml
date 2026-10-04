@@ -17,7 +17,7 @@ infrastructure:
     image: apache/kafka:3.7.0
   minio:
     enabled: true
-    image: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
+    image: bitnamilegacy/minio:latest
   couchbase:
     enabled: true
     image: couchbase:7.6.0
