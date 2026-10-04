@@ -17,7 +17,7 @@ infrastructure:
     image: apache/kafka:3.7.0
   minio:
     enabled: true
-    image: bitnamilegacy/minio:latest
+    image: bitnamilegacy/minio:2025.5.24
   postgres:
     enabled: true
     image: postgres:16-alpine
@@ -126,16 +126,16 @@ services:
 monitoring:
   prometheus:
     enabled: true
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.13.0
   grafana:
     enabled: true
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.0
   jaeger:
     enabled: true
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.76.0
   otelCollector:
     enabled: true
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.155.0
 
 etcdWatcher:
   enabled: true

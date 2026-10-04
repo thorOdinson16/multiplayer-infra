@@ -65,7 +65,27 @@ async def handle_leadership_gained():
         return
     game_loop = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
     await game_loop.load_state()
-    asyncio.create_task(game_loop.run())
+    asyncio.create_task(run_matches(game_loop))
+
+
+async def run_matches(current):
+    """Run matches back to back for as long as this instance leads.
+
+    A GameLoop ends after one match. Without this the room would go silent once
+    the first match finished: it was re-registered as available, but nothing ever
+    started the next match.
+    """
+    global game_loop
+    while True:
+        await current.run()
+        # run() also returns when stop() is called on leadership loss.
+        if game_loop is not current or not (election and election.is_leader):
+            return
+        logger.info(f"Match {match_id} finished, starting the next one")
+        await redis_client.delete(
+            f"match:{match_id}:state", f"match:{match_id}:last_offset", f"match:{match_id}:players")
+        current = GameLoop(match_id, redis_client, kafka_producer, connected_players, connected_spectators)
+        game_loop = current
 
 
 @app.on_event("startup")

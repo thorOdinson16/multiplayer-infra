@@ -103,7 +103,7 @@ services:
   minio:
     # Docker Hub minio/minio and quay.io/minio/minio are no longer published;
     # the Bitnami legacy archive is the pullable image that still runs MinIO.
-    image: bitnamilegacy/minio:latest
+    image: bitnamilegacy/minio:2025.5.24
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -133,7 +133,7 @@ services:
   # ====================== Monitoring ======================
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.76.0
     ports:
       - "16686:16686"
       - "4317:4317"
@@ -142,7 +142,7 @@ services:
       COLLECTOR_OTLP_ENABLED: "true"
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.155.0
     volumes:
       - ./monitoring/opentelemetry-collector-config.yaml:/etc/otel-collector-config.yaml
     command: ["--config=/etc/otel-collector-config.yaml"]
@@ -154,7 +154,7 @@ services:
       - jaeger
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.13.0
     ports:
       - "9090:9090"
     volumes:
@@ -162,7 +162,7 @@ services:
       - prometheus_data:/prometheus
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.0
     ports:
       - "3001:3000"
     environment:

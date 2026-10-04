@@ -22,13 +22,20 @@ _json_field() {
 echo "=== Multiplayer Infra E2E Test ==="
 echo ""
 
-# 1. Health checks
+# 1. Health checks: each service on its own published port, plus the gateway.
 echo "--- Health Checks ---"
-for svc in auth matchmaking game-room replay leaderboard analytics notification reconnect-handler; do
-  status=$(echo "$(_curl "$BASE_URL/health")" | _json_field status)
+unhealthy=0
+for entry in gateway:8080 auth:8001 matchmaking:8002 game-room:8003 replay:8004 leaderboard:8005 analytics:8006 notification:8007 reconnect-handler:8008; do
+  svc=${entry%%:*}; port=${entry##*:}
+  status=$(_curl "http://localhost:$port/health" | _json_field status)
   [ -n "$status" ] || status="unreachable"
   echo "  $svc: $status"
+  [ "$status" = "ok" ] || unhealthy=$((unhealthy + 1))
 done
+if [ "$unhealthy" -gt 0 ]; then
+  echo "FAIL: $unhealthy service(s) not healthy"
+  exit 1
+fi
 echo ""
 
 # 2. Register a test player

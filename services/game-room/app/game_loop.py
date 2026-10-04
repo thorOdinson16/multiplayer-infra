@@ -78,7 +78,7 @@ class GameLoop:
         self.input_queue = asyncio.Queue()
         self.last_committed_kafka_offset = -1
         self.spectator_buffer = SpectatorRingBuffer(max_size=self.tick_rate * 30, delay_ticks=self.tick_rate * 10)
-        self.match_duration_ticks = self.tick_rate * 300
+        self.match_duration_ticks = self.tick_rate * settings.match_duration_seconds
         self.match_ended = False
         self._connected_players = connected_players
         self._connected_spectators = connected_spectators
@@ -436,7 +436,8 @@ class GameLoop:
         }
         await self._publish_event(settings.kafka_topic_lifecycle, lifecycle_event)
         await self._publish_event(settings.kafka_topic_telemetry, {"type": "match_end", "tick": self.state.tick})
-        await self._write_match_record(outcome)
+        if self.state.players:
+            await self._write_match_record(outcome)
 
         try:
             from .room_pool import register_room

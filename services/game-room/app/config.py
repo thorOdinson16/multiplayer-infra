@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     # Game settings
     tick_rate: int = 20
+    match_duration_seconds: int = 300
     player_slot_hold_seconds: int = 30  # reconnect window
 
     # Auth service URL (for JWT validation)

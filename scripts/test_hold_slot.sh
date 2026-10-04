@@ -28,7 +28,13 @@ fi
 echo "User: $USER"
 
 # 2. Run WebSocket connect-disconnect-reconnect cycle
-RESULT=$(python3 scripts/test_ws_helpers.py connect_and_disconnect "$WS_URL" "$TOKEN" 2>/dev/null || echo "null")
+# Right after a failover the gateway can briefly route to a follower (the route map is
+# rewritten and NGINX reloaded within a few seconds), so retry until a leader accepts us.
+RESULT="null"
+for attempt in $(seq 1 20); do
+  RESULT=$(python3 scripts/test_ws_helpers.py connect_and_disconnect "$WS_URL" "$TOKEN" 2>/dev/null || echo "null")
+  case "$RESULT" in *null*) sleep 2 ;; *) break ;; esac
+done
 echo "WS result: $RESULT"
 
 if [ "$RESULT" = "null" ]; then
