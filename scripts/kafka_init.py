@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Create Kafka topics required by the platform."""
-import json
 import time
 import os
 from confluent_kafka.admin import AdminClient, NewTopic

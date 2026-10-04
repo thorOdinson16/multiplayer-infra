@@ -1,5 +1,4 @@
 import os
-import json
 import time
 import re
 import threading
@@ -37,8 +36,15 @@ def generate_upstream_config(upstreams):
         lines.append(f"    server {address};")
         lines.append("}")
         lines.append("")
+    # Clients that do not name a match must still land on a node that can accept
+    # them, i.e. a current leader; the static default only applies before any
+    # leader has registered.
+    default = DEFAULT_UPSTREAM
+    if upstreams:
+        first = sorted(upstreams)[0]
+        default = f"game_room_{re.sub(r'[^a-zA-Z0-9_]', '_', first)}"
     lines.append("map $arg_match_id $game_room_upstream {")
-    lines.append(f"    default {DEFAULT_UPSTREAM};")
+    lines.append(f"    default {default};")
     for match_id, address in sorted(upstreams.items()):
         safe_name = f"game_room_{re.sub(r'[^a-zA-Z0-9_]', '_', match_id)}"
         escaped_id = re.escape(match_id)

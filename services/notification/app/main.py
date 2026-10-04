@@ -6,7 +6,7 @@ import logging
 import aio_pika
 import redis.asyncio as redis
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 app = FastAPI(title="notification-service")
 logger = logging.getLogger("notification")

@@ -4,12 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Couchbase
-    couchbase_host: str = "localhost"
-    couchbase_sessions_bucket: str = "sessions"
-    couchbase_players_bucket: str = "players"
-    couchbase_username: str = "Administrator"
-    couchbase_password: str = "password"
+    # Postgres (players) and Redis (sessions)
+    database_url: str = "postgresql://game:game@localhost:5432/game"
+    redis_host: str = "localhost"
+    redis_port: int = 6379
 
     # JWT
     jwt_private_key_path: str = os.environ.get("JWT_PRIVATE_KEY_PATH", "private.pem")

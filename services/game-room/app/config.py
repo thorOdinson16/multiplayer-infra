@@ -17,12 +17,8 @@ class Settings(BaseSettings):
     kafka_topic_lifecycle: str = "match.lifecycle"
     kafka_topic_telemetry: str = "match.telemetry"
 
-    # Couchbase
-    couchbase_host: str = "localhost"
-    couchbase_username: str = "Administrator"
-    couchbase_password: str = "password"
-    couchbase_matches_bucket: str = "matches"
-    couchbase_replays_bucket: str = "replays"
+    # Postgres (match records, replay checkpoints)
+    database_url: str = "postgresql://game:game@localhost:5432/game"
 
     # Game settings
     tick_rate: int = 20

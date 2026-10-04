@@ -20,7 +20,7 @@ All inbound traffic — WebSocket connections, REST calls, health checks — ent
 
 Each service is independently containerized, deployed as a Kubernetes pod, and communicates either through the message brokers or direct HTTP depending on whether the interaction is synchronous or event-driven.
 
-**Auth Service** issues and validates JWT tokens on connection. Session tokens are stored in Couchbase with a TTL, allowing the reconnect handler to validate returning players without re-authentication.
+**Auth Service** issues and validates JWT tokens on connection. Session tokens are stored in Redis with a TTL, allowing the reconnect handler to validate returning players without re-authentication.
 
 **Matchmaking Service** pulls player connection requests off a RabbitMQ queue, groups players by skill rating, and assigns them to an available game room. If no room is available, it signals Kubernetes to spin up a new game room pod via the cluster API. This is where autoscaling originates.
 
@@ -30,7 +30,7 @@ Each service is independently containerized, deployed as a Kubernetes pod, and c
 
 **Replay Service** consumes the movement event stream from Kafka and persists a structured event log per match. Replays are seekable — the service can reconstruct any game state at any tick by replaying events from the beginning or from a checkpoint. Completed match replays are archived to S3-compatible object storage. Active replays are served directly from the Kafka consumer offset.
 
-**Leaderboard Service** writes match outcomes to Couchbase and queries rankings using N1QL — Couchbase's SQL dialect for JSON documents. This is a deliberate architectural choice: rather than maintaining a sorted set in Redis alone, rankings are derived from structured queries over the player document model, giving the system flexible ranking criteria without schema migrations.
+**Leaderboard Service** consumes match outcomes from Kafka, updates each player's stats and Elo rating in a single PostgreSQL transaction, and serves rankings with indexed SQL queries. A processed-matches table makes redelivered events idempotent, and offsets are committed only after the update succeeds.
 
 **Analytics Service** consumes telemetry events from a dedicated Kafka topic — movement heatmaps, kill positions, session durations, match lengths — and aggregates them into time-series data for the observability dashboard.
 
@@ -46,7 +46,7 @@ Two brokers with distinct responsibilities, intentionally never conflated.
 
 ### Data Layer
 
-**Couchbase** is the primary data store. Player profiles, authentication sessions, match history, and leaderboard documents all live here. The memory-first bucket architecture means hot documents — active player profiles, ongoing session tokens — are served entirely from RAM with disk as the persistence layer behind it. N1QL queries give the leaderboard service expressive ranking and filtering without a rigid schema. In a multi-region deployment, XDCR replicates player state across datacenters, which is the most directly relevant Couchbase capability to demonstrate.
+**PostgreSQL** is the primary data store: player profiles (with a unique username constraint), match history, and replay checkpoints (JSONB). Indexes on Elo and last-seen back the leaderboard queries. Authentication sessions are not stored here; they live in Redis, which provides native TTL expiry.
 
 **Redis** holds ephemeral per-match state — the current positions, health values, and score state for active games. This is not a replacement for Couchbase; it is a complement. Match state is transient and must be low-latency. Redis pub/sub also handles real-time state broadcast within a match before events are flushed to Kafka.
 
@@ -92,7 +92,7 @@ If the game room leader pod crashes mid-match, its etcd lease expires. The follo
 
 ### 6. Match ends
 
-The game room leader writes the final match outcome — scores, kill counts, duration — to Couchbase. A match-end event is published to Kafka. The Replay Service finalizes the event log for the match, writes the seekable replay to object storage, and updates its index. The Leaderboard Service consumes the match outcome and updates rankings via an N1QL upsert. The Analytics Service aggregates the match telemetry into the dashboard. RabbitMQ jobs dispatch match-over notifications to all players. The game room pods are returned to the idle pool or terminated, and Kubernetes reschedules capacity accordingly.
+The game room leader writes the final match outcome — scores, kill counts, duration — to PostgreSQL. A match-end event is published to Kafka. The Replay Service finalizes the event log for the match, writes the seekable replay to object storage, and updates its index. The Leaderboard Service consumes the match outcome and updates stats and Elo ratings in one transaction. The Analytics Service aggregates the match telemetry into the dashboard. RabbitMQ jobs dispatch match-over notifications to all players. The game room pods are returned to the idle pool or terminated, and Kubernetes reschedules capacity accordingly.
 
 ### 7. Replay playback
 

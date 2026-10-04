@@ -1,17 +1,15 @@
-"""Leaderboard Service -- Kafka consumer, N1QL queries."""
+"""Leaderboard Service -- Kafka consumer, Elo updates, Postgres queries."""
 import os
 import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Query
-from couchbase.cluster import Cluster
-from couchbase.auth import PasswordAuthenticator
-from couchbase.options import ClusterOptions
 from confluent_kafka import Consumer
-from prometheus_client import Counter, Histogram, generate_latest
+from prometheus_client import Histogram, generate_latest
 from starlette.responses import Response
+
+from . import db
 
 app = FastAPI(title="leaderboard-service")
 logger = logging.getLogger("leaderboard")
@@ -32,64 +30,48 @@ try:
 except Exception:
     pass
 
-couchbase_host = os.environ.get("COUCHBASE_HOST", "couchbase")
-couchbase_username = os.environ.get("COUCHBASE_USERNAME", "Administrator")
-couchbase_password = os.environ.get("COUCHBASE_PASSWORD", "password")
 kafka_bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
-cluster = None
+MAX_UPDATE_ATTEMPTS = 5
 
 query_latency = Histogram("leaderboard_query_latency_seconds", "Leaderboard query latency")
 
 
-def get_cluster():
-    global cluster
-    if cluster is None:
-        auth = PasswordAuthenticator(couchbase_username, couchbase_password)
-        cluster = Cluster(f"couchbase://{couchbase_host}", ClusterOptions(auth))
-        cluster.wait_until_ready(timedelta(seconds=30))
-    return cluster
+def process_event(msg) -> bool:
+    """Apply one lifecycle message. Returns True when it is safe to commit its offset."""
+    try:
+        event = json.loads(msg.value().decode())
+    except (ValueError, UnicodeDecodeError):
+        logger.error("Skipping undecodable lifecycle message")
+        return True
+    if event.get("type") != "match.end" or not event.get("match_id"):
+        return True
+    for attempt in range(1, MAX_UPDATE_ATTEMPTS + 1):
+        try:
+            result = db.apply_match(event)
+            logger.info(f"Match {event['match_id']}: {result}")
+            return True
+        except Exception as e:
+            logger.error(f"Leaderboard update failed (attempt {attempt}/{MAX_UPDATE_ATTEMPTS}): {e}")
+            time.sleep(min(2 ** attempt, 15))
+    # Give up on a poison event rather than blocking the partition forever.
+    logger.error(f"Dropping match.end for {event['match_id']} after {MAX_UPDATE_ATTEMPTS} attempts")
+    return True
 
 
 def consume_lifecycle():
     consumer = Consumer({
         'bootstrap.servers': kafka_bootstrap, 'group.id': 'leaderboard-service',
-        'auto.offset.reset': 'earliest', 'enable.auto.commit': True,
+        'auto.offset.reset': 'earliest', 'enable.auto.commit': False,
     })
     consumer.subscribe(['match.lifecycle'])
     while True:
         msg = consumer.poll(0.5)
-        if msg and not msg.error():
-            event = json.loads(msg.value().decode())
-            if event.get("type") == "match.end":
-                try:
-                    update_leaderboard(event)
-                except Exception as e:
-                    logger.error(f"Leaderboard update error: {e}")
-        time.sleep(0.1)
-
-
-def update_leaderboard(event):
-    cl = get_cluster()
-    outcome = event.get("outcome", {})
-    scores = outcome.get("scores", {})
-    players = event.get("players", [])
-    for player_id in players:
-        score = scores.get(player_id, 0)
-        try:
-            result = cl.query("SELECT * FROM `players` WHERE playerId = $1", player_id)
-            rows = list(result.rows())
-            if rows:
-                player = rows[0]["players"]
-                new_wins = player.get("wins", 0) + (1 if outcome.get("winner") == player_id else 0)
-                new_losses = player.get("losses", 0) + (0 if outcome.get("winner") == player_id else 1)
-                new_total = player.get("totalMatches", 0) + 1
-                new_avg = ((player.get("averageScore", 0) * (new_total - 1)) + score) / new_total
-                cl.query(
-                    "UPDATE `players` SET wins=$1, losses=$2, totalMatches=$3, averageScore=$4, lastSeen=$5 WHERE playerId=$6",
-                    new_wins, new_losses, new_total, new_avg, datetime.now(timezone.utc).isoformat(), player_id,
-                )
-        except Exception as e:
-            logger.error(f"Error updating {player_id}: {e}")
+        if msg is None or msg.error():
+            continue
+        # Commit only after the update is durable, so a crash replays the event
+        # (apply_match is idempotent) instead of losing it.
+        if process_event(msg):
+            consumer.commit(message=msg, asynchronous=False)
 
 
 @app.on_event("startup")
@@ -104,53 +86,36 @@ async def health():
     return {"status": "ok"}
 
 
+# Handlers that hit Postgres are plain `def` so they run in FastAPI's threadpool.
 @app.get("/ready")
-async def ready():
+def ready():
     try:
-        get_cluster().ping()
+        db.ping()
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="Not ready")
 
 
 @app.get("/leaderboard")
-async def get_leaderboard(window: str = Query("all", regex="^(daily|weekly|all)$"), limit: int = Query(50, ge=1, le=200)):
-    cl = get_cluster()
+def get_leaderboard(window: str = Query("all", pattern="^(daily|weekly|all)$"), limit: int = Query(50, ge=1, le=200)):
     try:
-        if window == "daily":
-            since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-            condition = f" AND lastSeen >= '{since}'"
-        elif window == "weekly":
-            since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-            condition = f" AND lastSeen >= '{since}'"
-        else:
-            condition = ""
-        result = cl.query(
-            f"SELECT playerId, username, eloRating, wins, losses, totalMatches, averageScore "
-            f"FROM `players` WHERE type = 'player'{condition} ORDER BY eloRating DESC LIMIT {limit}"
-        )
-        return {"window": window, "rankings": list(result.rows())}
+        with query_latency.time():
+            return {"window": window, "rankings": db.top_players(window, limit)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Leaderboard query failed: {e}")
+        raise HTTPException(status_code=500, detail="Leaderboard unavailable")
 
 
 @app.get("/leaderboard/player/{player_id}")
-async def get_player_stats(player_id: str):
-    cl = get_cluster()
+def get_player_stats(player_id: str):
     try:
-        result = cl.query("SELECT playerId, username, eloRating, wins, losses, totalMatches, averageScore FROM `players` WHERE playerId = $1", player_id)
-        rows = list(result.rows())
-        if not rows:
-            raise HTTPException(status_code=404, detail="Player not found")
-        player = rows[0]
-        rank_result = cl.query("SELECT COUNT(*) as r FROM `players` WHERE type = 'player' AND eloRating > $1", player.get("eloRating", 0))
-        rank_rows = list(rank_result.rows())
-        rank = (rank_rows[0].get("r", 0) if rank_rows else 0) + 1
-        return {"player": player, "rank": rank}
-    except HTTPException:
-        raise
+        player, rank = db.player_with_rank(player_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Player stats query failed: {e}")
+        raise HTTPException(status_code=500, detail="Leaderboard unavailable")
+    if player is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    return {"player": player, "rank": rank}
 
 
 @app.get("/metrics")

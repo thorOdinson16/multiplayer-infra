@@ -6,6 +6,7 @@ import time
 from confluent_kafka import Consumer, KafkaException, TopicPartition
 from prometheus_client import Gauge, Counter, Histogram
 
+from . import db
 from .config import settings
 from .models import GameState, PlayerState
 from .spectator_buffer import SpectatorRingBuffer
@@ -102,28 +103,17 @@ class GameLoop:
 
     async def _try_load_checkpoint(self):
         try:
-            from couchbase.cluster import Cluster
-            from couchbase.auth import PasswordAuthenticator
-            from couchbase.options import ClusterOptions
-            auth = PasswordAuthenticator(settings.couchbase_username, settings.couchbase_password)
-            cluster = Cluster(f"couchbase://{settings.couchbase_host}", ClusterOptions(auth))
-            query = (
-                f"SELECT tick, events FROM {settings.couchbase_replays_bucket} "
-                f"WHERE type = 'replay_checkpoint' AND matchId = $match_id "
-                f"ORDER BY tick DESC LIMIT 1"
-            )
-            result = cluster.query(query, match_id=self.match_id)
-            for row in result:
-                for event in row["events"]:
-                    self._apply_event(event)
-                tick = row["tick"]
-                cluster.close()
-                logger.info(f"Restored state from Couchbase checkpoint at tick {tick}")
-                return tick
-            cluster.close()
+            checkpoint = await asyncio.to_thread(db.load_latest_checkpoint, self.match_id)
         except Exception as e:
             logger.warning(f"Checkpoint load failed (will replay from Kafka): {e}")
-        return None
+            return None
+        if checkpoint is None:
+            return None
+        tick, events = checkpoint
+        for event in events:
+            self._apply_event(event)
+        logger.info(f"Restored state from checkpoint at tick {tick}")
+        return tick
 
     async def _cold_start_replay(self):
         checkpoint_tick = await self._try_load_checkpoint()
@@ -265,7 +255,11 @@ class GameLoop:
         await self._publish_event(settings.kafka_topic_telemetry, {"type": "match_start", "tick": self.state.tick})
         while self.running and not self.match_ended:
             start = asyncio.get_event_loop().time()
-            await self._process_tick()
+            try:
+                await self._process_tick()
+            except Exception as e:
+                # One bad tick must not kill the match for everyone.
+                logger.exception(f"Tick processing failed: {e}")
             elapsed = asyncio.get_event_loop().time() - start
             tick_latency.observe(elapsed)
             await asyncio.sleep(max(0, tick_delay - elapsed))
@@ -405,7 +399,8 @@ class GameLoop:
         players_key = f"match:{self.match_id}:players"
         await self.redis.set(state_key, json.dumps(self.state.to_dict()))
         await self.redis.set(offset_key, str(self.last_committed_kafka_offset))
-        await self.redis.sadd(players_key, *list(self.state.players.keys()))
+        if self.state.players:
+            await self.redis.sadd(players_key, *self.state.players.keys())
         ttl = int(self.match_duration_ticks / self.tick_rate) + 60
         for key in [state_key, offset_key, players_key]:
             await self.redis.expire(key, ttl)
@@ -441,7 +436,7 @@ class GameLoop:
         }
         await self._publish_event(settings.kafka_topic_lifecycle, lifecycle_event)
         await self._publish_event(settings.kafka_topic_telemetry, {"type": "match_end", "tick": self.state.tick})
-        await self._write_match_to_couchbase(outcome)
+        await self._write_match_record(outcome)
 
         try:
             from .room_pool import register_room
@@ -452,25 +447,18 @@ class GameLoop:
 
         active_matches.labels(match_id=self.match_id).set(0)
 
-    async def _write_match_to_couchbase(self, outcome):
-        try:
-            from couchbase.cluster import Cluster
-            from couchbase.auth import PasswordAuthenticator
-            from couchbase.options import ClusterOptions
-            auth = PasswordAuthenticator(settings.couchbase_username, settings.couchbase_password)
-            cluster = Cluster(f"couchbase://{settings.couchbase_host}", ClusterOptions(auth))
-            bucket = cluster.bucket(settings.couchbase_matches_bucket)
-            coll = bucket.default_collection()
-            match_doc = {
-                "type": "match", "matchId": self.match_id,
-                "players": list(self.state.players.keys()),
-                "startedAt": self.state.started_at, "endedAt": time.time(),
-                "durationSeconds": time.time() - self.state.started_at, "outcome": outcome,
-            }
-            coll.upsert(self.match_id, match_doc)
-            cluster.close()
-        except Exception as e:
-            logger.error(f"Couchbase match write failed: {e}")
+    async def _write_match_record(self, outcome):
+        ended_at = time.time()
+        for attempt in range(1, 4):
+            try:
+                await asyncio.to_thread(
+                    db.save_match, self.match_id, self.state.started_at, ended_at,
+                    ended_at - self.state.started_at, list(self.state.players.keys()), outcome,
+                )
+                return
+            except Exception as e:
+                logger.error(f"Match record write failed (attempt {attempt}/3): {e}")
+                await asyncio.sleep(attempt)
 
     async def stop(self):
         self.running = False

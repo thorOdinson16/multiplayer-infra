@@ -33,7 +33,7 @@ async def websocket_endpoint(websocket: WebSocket, election, game_loop, connecte
             await websocket.close(code=4001, reason="Missing token")
             return
         player_id = await validate_token(token, auth_service_url)
-        if not player_id and mode != "spectator":
+        if not player_id:
             await websocket.close(code=4001, reason="Invalid token")
             return
     except asyncio.TimeoutError:

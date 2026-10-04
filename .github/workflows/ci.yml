@@ -13,18 +13,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          for svc in services/*; do
-            if [ -f "$svc/requirements.txt" ]; then
-              pip install -r "$svc/requirements.txt" 2>/dev/null || true
-            fi
-          done
       - name: Lint with flake8
         run: |
           pip install flake8
-          flake8 services/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 services/ scripts/ --count --select=E9,F63,F7,F82,F401,F811,F821 --show-source --statistics
+      - name: Check Helm schema copy matches scripts/postgres_init.sql
+        run: |
+          diff scripts/postgres_init.sql infra/helm/charts/game-platform/files/postgres_init.sql
+      - name: Render Helm chart
+        run: |
+          helm template infra/helm/charts/game-platform > /dev/null
       - name: Check Python syntax
         run: |
           for f in $(find services/ -name "*.py" -not -path "*/env/*" -not -path "*/node_modules/*" -not -path "*/__pycache__/*") scripts/test_ws_helpers.py; do
@@ -43,15 +41,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest pytest-asyncio
-          for svc in services/*; do
-            if [ -f "$svc/requirements.txt" ]; then
-              pip install -r "$svc/requirements.txt" 2>/dev/null || true
+          # Only services that have tests; a failed install must fail the job.
+          for svc in services/*/; do
+            if ls "$svc"app/test_*.py >/dev/null 2>&1 || ls "$svc"test_*.py >/dev/null 2>&1; then
+              pip install -r "$svc/requirements.txt"
             fi
           done
       - name: Run unit tests
         run: |
           for svc in services/*/app/; do
-            if ls "$svc"test_*.py 2>/dev/null; then
+            if ls "$svc"test_*.py >/dev/null 2>&1; then
               echo "Running tests in $svc"
               python -m pytest "$svc" -v --tb=short
             fi
@@ -133,7 +132,7 @@ jobs:
         run: |
           echo "=== Container Status ==="
           docker compose ps
-          for svc in kafka couchbase auth nginx game-room game-room-2 matchmaking replay leaderboard analytics notification reconnect-handler etcd-watcher; do
+          for svc in kafka postgres redis auth nginx game-room game-room-2 matchmaking replay leaderboard analytics notification reconnect-handler etcd-watcher; do
             echo "=== $svc ==="
             docker compose logs --tail=40 "$svc" 2>/dev/null || true
           done

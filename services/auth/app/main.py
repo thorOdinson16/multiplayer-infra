@@ -13,10 +13,10 @@ logger = logging.getLogger("auth")
 from .config import settings
 from .models import LoginRequest, RegisterRequest, TokenResponse, ValidateResponse
 from .jwt_handler import create_token, decode_token
-from .couchbase_client import (
-    store_session, get_session, delete_session,
-    store_player, get_player_by_username, get_player,
-    store_player_session, get_player_session, delete_player_session
+from .db import (
+    UsernameTaken, create_player, get_player_by_username, get_player,
+    store_session, store_player_session, get_player_session, delete_player_session,
+    ping, close_connections,
 )
 
 app = FastAPI(title="auth-service")
@@ -51,10 +51,9 @@ async def health():
 
 
 @app.get("/ready")
-async def ready():
+def ready():
     try:
-        from .couchbase_client import get_cluster
-        get_cluster().ping()
+        ping()
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="Not ready")
@@ -84,33 +83,22 @@ def _issue_session(player_id: str) -> str:
     return token
 
 
+# Endpoints touching Postgres/Redis/bcrypt are plain `def` so FastAPI runs them in
+# its threadpool instead of blocking the event loop.
 @app.post("/auth/register", response_model=TokenResponse, status_code=201)
-async def register(req: RegisterRequest):
+def register(req: RegisterRequest):
     register_requests.inc()
-    if get_player_by_username(req.username):
-        raise HTTPException(status_code=409, detail="Username already taken")
     player_id = str(uuid.uuid4())
     hashed = bcrypt.hashpw(req.password.encode(), bcrypt.gensalt()).decode()
-    now = datetime.now(timezone.utc)
-    player_doc = {
-        "type": "player",
-        "playerId": player_id,
-        "username": req.username,
-        "passwordHash": hashed,
-        "eloRating": 1200,
-        "wins": 0,
-        "losses": 0,
-        "totalMatches": 0,
-        "averageScore": 0.0,
-        "createdAt": now.isoformat(),
-        "lastSeen": now.isoformat(),
-    }
-    store_player(player_id, player_doc)
+    try:
+        create_player(player_id, req.username, hashed)
+    except UsernameTaken:
+        raise HTTPException(status_code=409, detail="Username already taken")
     return TokenResponse(access_token=_issue_session(player_id))
 
 
 @app.post("/auth/login", response_model=TokenResponse)
-async def login(req: LoginRequest):
+def login(req: LoginRequest):
     login_requests.inc()
     player = get_player_by_username(req.username)
     if not player or not bcrypt.checkpw(req.password.encode(), player["passwordHash"].encode()):
@@ -119,7 +107,7 @@ async def login(req: LoginRequest):
 
 
 @app.post("/auth/refresh", response_model=TokenResponse)
-async def refresh(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def refresh(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = decode_token(credentials.credentials)
     except Exception:
@@ -134,7 +122,7 @@ async def refresh(credentials: HTTPAuthorizationCredentials = Depends(security))
 
 
 @app.post("/auth/logout")
-async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = decode_token(credentials.credentials)
     except Exception:
@@ -144,7 +132,7 @@ async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
 
 
 @app.get("/auth/validate", response_model=ValidateResponse)
-async def validate(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def validate(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = decode_token(credentials.credentials)
     except Exception:
@@ -165,7 +153,7 @@ async def jwks():
 
 
 @app.get("/players/{player_id}")
-async def get_player_profile(
+def get_player_profile(
     player_id: str,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
@@ -194,6 +182,5 @@ async def get_player_profile(
 
 @app.on_event("shutdown")
 async def shutdown():
-    from .couchbase_client import close_connections
     close_connections()
     logger.info("Auth service shut down cleanly")

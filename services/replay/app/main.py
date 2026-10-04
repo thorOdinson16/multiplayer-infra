@@ -4,15 +4,14 @@ import json
 import logging
 import threading
 import time
-from datetime import timedelta
 from io import BytesIO
 from confluent_kafka import Consumer
 from fastapi import FastAPI, HTTPException, Query
 from minio import Minio
 from minio.error import S3Error
-from couchbase.cluster import Cluster
-from couchbase.auth import PasswordAuthenticator
-from couchbase.options import ClusterOptions
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
 app = FastAPI(title="replay-service")
 logger = logging.getLogger("replay")
@@ -37,16 +36,13 @@ kafka_bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 minio_endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
 minio_access = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
 minio_secret = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
-couchbase_host = os.environ.get("COUCHBASE_HOST", "couchbase")
-couchbase_username = os.environ.get("COUCHBASE_USERNAME", "Administrator")
-couchbase_password = os.environ.get("COUCHBASE_PASSWORD", "password")
-couchbase_replays_bucket = os.environ.get("COUCHBASE_REPLAYS_BUCKET", "replays")
+database_url = os.environ.get("DATABASE_URL", "postgresql://game:game@localhost:5432/game")
 replay_bucket = "replays"
 checkpoint_interval = int(os.environ.get("CHECKPOINT_INTERVAL", "300"))
 
 minio_client = None
-couchbase_cluster = None
-_cluster_lock = threading.Lock()
+db_pool = None
+_pool_lock = threading.Lock()
 match_events = {}
 match_checkpoints = {}
 
@@ -60,33 +56,28 @@ def get_minio():
     return minio_client
 
 
-def get_couchbase():
-    global couchbase_cluster
-    if couchbase_cluster is None:
-        with _cluster_lock:
-            if couchbase_cluster is None:
-                auth = PasswordAuthenticator(couchbase_username, couchbase_password)
-                cluster = Cluster(f"couchbase://{couchbase_host}", ClusterOptions(auth))
-                cluster.wait_until_ready(timedelta(seconds=30))
-                couchbase_cluster = cluster
-    return couchbase_cluster
+def get_pool():
+    global db_pool
+    if db_pool is None:
+        with _pool_lock:
+            if db_pool is None:
+                pool = ConnectionPool(database_url, min_size=1, max_size=5,
+                                      kwargs={"row_factory": dict_row}, open=False)
+                pool.open(wait=True, timeout=30)
+                db_pool = pool
+    return db_pool
 
 
 def save_checkpoint(match_id, tick, events_snapshot):
     try:
-        coll = get_couchbase().bucket(couchbase_replays_bucket).default_collection()
         last_state = events_snapshot[-1].get("players", {}) if events_snapshot else {}
-        checkpoint_key = f"replay:checkpoint:{match_id}:{tick}"
-        doc = {
-            "type": "replay_checkpoint",
-            "matchId": match_id,
-            "tick": tick,
-            "snapshotState": {"players": last_state},
-            "events": events_snapshot,
-            "eventCount": len(events_snapshot),
-            "createdAt": time.time(),
-        }
-        coll.upsert(checkpoint_key, doc)
+        with get_pool().connection() as conn:
+            conn.execute(
+                "INSERT INTO replay_checkpoints (match_id, tick, events, snapshot) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (match_id, tick) DO UPDATE SET events = EXCLUDED.events, "
+                "snapshot = EXCLUDED.snapshot, created_at = now()",
+                (match_id, tick, Jsonb(events_snapshot), Jsonb({"players": last_state})),
+            )
         logger.info(f"Checkpoint saved for match {match_id} at tick {tick}")
     except Exception as e:
         logger.error(f"Checkpoint save failed: {e}")
@@ -94,14 +85,12 @@ def save_checkpoint(match_id, tick, events_snapshot):
 
 def load_latest_checkpoint(match_id):
     try:
-        cluster = get_couchbase()
-        query = (
-            f"SELECT tick, events FROM `{couchbase_replays_bucket}` "
-            f"WHERE type = 'replay_checkpoint' AND matchId = $match_id "
-            f"ORDER BY tick DESC LIMIT 1"
-        )
-        result = cluster.query(query, match_id=match_id)
-        for row in result:
+        with get_pool().connection() as conn:
+            row = conn.execute(
+                "SELECT tick, events FROM replay_checkpoints WHERE match_id = %s ORDER BY tick DESC LIMIT 1",
+                (match_id,),
+            ).fetchone()
+        if row:
             return row["tick"], row["events"]
     except Exception as e:
         logger.error(f"Checkpoint load failed: {e}")
@@ -185,12 +174,17 @@ async def health():
 
 
 @app.get("/ready")
-async def ready():
-    return {"status": "ready"}
+def ready():
+    try:
+        with get_pool().connection() as conn:
+            conn.execute("SELECT 1")
+        return {"status": "ready"}
+    except Exception:
+        raise HTTPException(status_code=503, detail="Not ready")
 
 
 @app.get("/replay/{match_id}")
-async def get_replay(match_id: str):
+def get_replay(match_id: str):
     try:
         minio = get_minio()
         response = minio.get_object(replay_bucket, f"{match_id}/replay.json")
@@ -203,7 +197,7 @@ async def get_replay(match_id: str):
 
 
 @app.get("/replay/{match_id}/seek")
-async def seek_replay(match_id: str, tick: int = Query(0, ge=0)):
+def seek_replay(match_id: str, tick: int = Query(0, ge=0)):
     try:
         minio = get_minio()
         response = minio.get_object(replay_bucket, f"{match_id}/replay.json")

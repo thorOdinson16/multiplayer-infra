@@ -18,9 +18,9 @@ infrastructure:
   minio:
     enabled: true
     image: bitnamilegacy/minio:latest
-  couchbase:
+  postgres:
     enabled: true
-    image: couchbase:7.6.0
+    image: postgres:16-alpine
 
 services:
   auth:
@@ -35,7 +35,8 @@ services:
         cpu: 500m
         memory: 256Mi
     env:
-      COUCHBASE_HOST: couchbase
+      DATABASE_URL: postgresql://game:game@postgres:5432/game
+      REDIS_HOST: redis
       JWT_PRIVATE_KEY_PATH: /app/keys/private.pem
       JWT_PUBLIC_KEY_PATH: /app/keys/public.pem
 
@@ -75,6 +76,7 @@ services:
       ETCD_HOST: etcd
       REDIS_HOST: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      DATABASE_URL: postgresql://game:game@postgres:5432/game
 
   replay:
     replicas: 1
@@ -83,13 +85,14 @@ services:
     env:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       MINIO_ENDPOINT: minio:9000
+      DATABASE_URL: postgresql://game:game@postgres:5432/game
 
   leaderboard:
     replicas: 1
     image: multiplayer-leaderboard:latest
     port: 8000
     env:
-      COUCHBASE_HOST: couchbase
+      DATABASE_URL: postgresql://game:game@postgres:5432/game
 
   analytics:
     replicas: 1

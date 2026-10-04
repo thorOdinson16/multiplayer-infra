@@ -104,7 +104,9 @@ Game room leader election is delegated to etcd leases rather than embedding a Ra
 **ADR-02: Kafka and RabbitMQ as complementary, not competing brokers**  
 Kafka is used exclusively for immutable, ordered, high-throughput event logs (movement, telemetry, replay). RabbitMQ is used exclusively for task queues requiring competing consumers and explicit acknowledgement (matchmaking, notifications, async jobs). These are fundamentally different messaging primitives and must not be conflated.
 
-**ADR-03: Couchbase as primary data store**  
+**ADR-03: Couchbase as primary data store — SUPERSEDED**  
+> Superseded: the platform now uses PostgreSQL for players, matches and replay checkpoints, and Redis (with TTLs) for sessions. Reasons: unique constraints and transactions fix registration and leaderboard race conditions, startup is fast, and the Couchbase SDK blocked the event loop. Other Couchbase references in this document describe the original design.
+
 Couchbase is selected over PostgreSQL or MongoDB for its memory-first bucket architecture, native N1QL support, and XDCR capability. These features map directly to the access patterns required: hot player session data served from RAM, flexible leaderboard queries without schema migrations, and future multi-region replication.
 
 **ADR-04: etcd over ZooKeeper**  

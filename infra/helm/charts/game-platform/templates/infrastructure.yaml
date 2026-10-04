@@ -304,61 +304,76 @@ spec:
 ---
 {{- end }}
 
-{{- if .Values.infrastructure.couchbase.enabled }}
+{{- if .Values.infrastructure.postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: game-platform
+data:
+  01-init.sql: |
+{{ .Files.Get "files/postgres_init.sql" | indent 4 }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: couchbase
+  name: postgres
   namespace: game-platform
   labels:
-    app: couchbase
+    app: postgres
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: couchbase
+      app: postgres
   template:
     metadata:
       labels:
-        app: couchbase
+        app: postgres
     spec:
       containers:
-        - name: couchbase
-          image: {{ .Values.infrastructure.couchbase.image }}
+        - name: postgres
+          image: {{ .Values.infrastructure.postgres.image }}
           ports:
-            - containerPort: 8091
-              name: web
-            - containerPort: 11210
-              name: data
+            - containerPort: 5432
           env:
-            - name: COUCHBASE_ADMINISTRATOR_USERNAME
-              value: "Administrator"
-            - name: COUCHBASE_ADMINISTRATOR_PASSWORD
-              value: "password"
-          livenessProbe:
-            httpGet:
-              path: /pools
-              port: 8091
-            initialDelaySeconds: 60
-            periodSeconds: 30
-            timeoutSeconds: 10
+            - name: POSTGRES_USER
+              value: "game"
+            - name: POSTGRES_PASSWORD
+              value: "game"
+            - name: POSTGRES_DB
+              value: "game"
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "game", "-d", "game"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: init
+          configMap:
+            name: postgres-init
+        # emptyDir mirrors the previous setup; use a PVC for durable data.
+        - name: data
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: couchbase
+  name: postgres
   namespace: game-platform
   labels:
-    app: couchbase
+    app: postgres
 spec:
   selector:
-    app: couchbase
+    app: postgres
   ports:
-    - port: 8091
-      targetPort: 8091
-      name: web
-    - port: 11210
-      targetPort: 11210
-      name: data
+    - port: 5432
+      targetPort: 5432
+      name: postgres
 ---
 {{- end }}

@@ -5,6 +5,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
     healthcheck:
@@ -83,32 +84,21 @@ services:
     working_dir: /app
     command: ["sh", "-c", "pip install -q confluent-kafka && python init.py"]
 
-  couchbase:
-    image: couchbase:7.6.0
-    ports:
-      - "8091-8096:8091-8096"
-      - "11210:11210"
+  postgres:
+    image: postgres:16-alpine
     environment:
-      COUCHBASE_ADMINISTRATOR_USERNAME: ${COUCHBASE_USERNAME:-Administrator}
-      COUCHBASE_ADMINISTRATOR_PASSWORD: ${COUCHBASE_PASSWORD:-password}
+      POSTGRES_USER: ${POSTGRES_USER:-game}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-game}
+      POSTGRES_DB: ${POSTGRES_DB:-game}
     volumes:
-      - couchbase_data:/opt/couchbase/var
+      - postgres_data:/var/lib/postgresql/data
+      # Schema is idempotent and runs on first start of an empty data volume.
+      - ./scripts/postgres_init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8091/pools >/dev/null 2>&1"]
-      interval: 30s
-      timeout: 10s
-      retries: 15
-      start_period: 60s
-
-  couchbase-init:
-    image: python:3.11-slim
-    depends_on:
-      couchbase:
-        condition: service_healthy
-    volumes:
-      - ./scripts/couchbase_init.py:/app/init.py
-    working_dir: /app
-    command: ["sh", "-c", "pip install -q requests && python init.py"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   minio:
     # Docker Hub minio/minio and quay.io/minio/minio are no longer published;
@@ -256,11 +246,8 @@ services:
   auth:
     build: services/auth
     environment:
-      - COUCHBASE_HOST=couchbase
-      - COUCHBASE_SESSIONS_BUCKET=sessions
-      - COUCHBASE_PLAYERS_BUCKET=players
-      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
-      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-game}:${POSTGRES_PASSWORD:-game}@postgres:5432/${POSTGRES_DB:-game}
+      - REDIS_HOST=redis
       - JWT_PRIVATE_KEY_PATH=/app/keys/private.pem
       - JWT_PUBLIC_KEY_PATH=/app/keys/public.pem
       - OTEL_SERVICE_NAME=auth-service
@@ -276,8 +263,10 @@ services:
       retries: 5
       start_period: 10s
     depends_on:
-      couchbase-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       keys-init:
         condition: service_completed_successfully
 
@@ -312,9 +301,7 @@ services:
       - ETCD_HOST=etcd
       - REDIS_HOST=redis
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - COUCHBASE_HOST=couchbase
-      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
-      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-game}:${POSTGRES_PASSWORD:-game}@postgres:5432/${POSTGRES_DB:-game}
       - AUTH_SERVICE_URL=http://auth:8000
       - GRPC_DNS_RESOLVER=native
       - OTEL_SERVICE_NAME=game-room-service
@@ -330,6 +317,8 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       etcd:
         condition: service_healthy
       redis:
@@ -349,9 +338,7 @@ services:
       - ETCD_HOST=etcd
       - REDIS_HOST=redis
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - COUCHBASE_HOST=couchbase
-      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
-      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-game}:${POSTGRES_PASSWORD:-game}@postgres:5432/${POSTGRES_DB:-game}
       - AUTH_SERVICE_URL=http://auth:8000
       - GRPC_DNS_RESOLVER=native
       - OTEL_SERVICE_NAME=game-room-service-2
@@ -367,6 +354,8 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       etcd:
         condition: service_healthy
       redis:
@@ -378,10 +367,7 @@ services:
     build: services/replay
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      - COUCHBASE_HOST=couchbase
-      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
-      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
-      - COUCHBASE_REPLAYS_BUCKET=replays
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-game}:${POSTGRES_PASSWORD:-game}@postgres:5432/${POSTGRES_DB:-game}
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -392,17 +378,15 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-      couchbase-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       minio:
         condition: service_healthy
 
   leaderboard:
     build: services/leaderboard
     environment:
-      - COUCHBASE_HOST=couchbase
-      - COUCHBASE_USERNAME=${COUCHBASE_USERNAME:-Administrator}
-      - COUCHBASE_PASSWORD=${COUCHBASE_PASSWORD:-password}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-game}:${POSTGRES_PASSWORD:-game}@postgres:5432/${POSTGRES_DB:-game}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - OTEL_SERVICE_NAME=leaderboard-service
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
@@ -411,8 +395,8 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-      couchbase-init:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
 
   analytics:
     build: services/analytics
@@ -470,7 +454,7 @@ services:
       - nginx
 
 volumes:
-  couchbase_data:
+  postgres_data:
   minio_data:
   prometheus_data:
   grafana_data:

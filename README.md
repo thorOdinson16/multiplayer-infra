@@ -1,7 +1,7 @@
 # Distributed Real-Time Multiplayer Infrastructure Platform
 
 Full-stack distributed systems demo: Python microservices, Node.js game client,
-etcd leader election, Couchbase, Kafka, RabbitMQ, Redis, Kubernetes-ready.
+etcd leader election, PostgreSQL, Kafka, RabbitMQ, Redis, Kubernetes-ready.
 
 ## Quick Start
 
@@ -46,7 +46,7 @@ docker-compose ps
 | RabbitMQ | 5672/15672 | Task queues (guest/guest) |
 | etcd | 2379 | Leader election & coordination |
 | Kafka | 9092 | Immutable event log |
-| Couchbase | 8091 | Primary data store (Administrator/password) |
+| PostgreSQL | 5432 (internal) | Players, matches, replay checkpoints (game/game) |
 | MinIO | 9000/9001 | Object storage (minioadmin/minioadmin) |
 | Prometheus | 9090 | Metrics collection |
 | Grafana | 3001 | Dashboards (admin/admin) |
@@ -59,12 +59,12 @@ Client (WebSocket)
   |
 NGINX Gateway (port 8080)
   |
-  +-- Auth Service ------------> Couchbase
+  +-- Auth Service ------------> PostgreSQL, Redis
   +-- Matchmaking Service -----> RabbitMQ, etcd
-  +-- Game Room Server ---------> Redis, Kafka, etcd, Couchbase
+  +-- Game Room Server ---------> Redis, Kafka, etcd, PostgreSQL
   +-- Reconnect Handler --------> Redis, etcd
-  +-- Replay Service -----------> Kafka, MinIO, Couchbase
-  +-- Leaderboard Service ------> Kafka, Couchbase
+  +-- Replay Service -----------> Kafka, MinIO, PostgreSQL
+  +-- Leaderboard Service ------> Kafka, PostgreSQL
   +-- Analytics Service --------> Kafka, Prometheus
   +-- Notification Service -----> RabbitMQ, Redis
 ```
@@ -101,7 +101,6 @@ NGINX Gateway (port 8080)
 - **Jaeger**: http://localhost:16686
 - **Prometheus**: http://localhost:9090
 - **RabbitMQ**: http://localhost:15672 (guest/guest)
-- **Couchbase**: http://localhost:8091 (Administrator/password)
 - **MinIO**: http://localhost:9001 (minioadmin/minioadmin)
 
 ## Testing
@@ -140,12 +139,12 @@ NGINX Gateway (port 8080)
 │   └── grafana-dashboards/
 ├── scripts/          # Init & test scripts
 ├── services/
-│   ├── auth/             # JWT + Couchbase sessions
+│   ├── auth/             # JWT + Redis sessions, Postgres players
 │   ├── matchmaking/      # RabbitMQ + Elo matcher
 │   ├── game-room/        # Game loop + leader election
 │   ├── reconnect-handler/# Redis state + etcd
 │   ├── replay/           # Kafka + MinIO archives
-│   ├── leaderboard/      # Couchbase N1QL
+│   ├── leaderboard/      # Elo updates + Postgres rankings
 │   ├── analytics/        # Kafka + Prometheus
 │   └── notification/     # RabbitMQ + WebSocket
 └── docker-compose.yml   # Single-command deploy

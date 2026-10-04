@@ -36,57 +36,23 @@ if [ "$RESULT" = "null" ]; then
   exit 1
 fi
 
-FIRST_PLAYERS=$(echo "$RESULT" | python3 -c "
-import sys,json
-data = json.loads(sys.stdin.read())
-if isinstance(data, list) and len(data) >= 2:
-    first = data[0]
-    if first and 'players' in first:
-        print(json.dumps(first['players']))
-    else:
-        print('null')
-else:
-    print('null')
-" 2>/dev/null)
-
-SECOND_PLAYERS=$(echo "$RESULT" | python3 -c "
-import sys,json
-data = json.loads(sys.stdin.read())
-if isinstance(data, list) and len(data) >= 2:
-    second = data[1]
-    if second and 'players' in second:
-        print(json.dumps(second['players']))
-    else:
-        print('null')
-else:
-    print('null')
-" 2>/dev/null)
-
-if [ "$FIRST_PLAYERS" = "null" ] || [ "$SECOND_PLAYERS" = "null" ]; then
-  echo "INFO: Could not extract player state from both connections (may be OK if match is not running)"
-  echo "      This test requires an active game match."
-  exit 0
+if ! echo "$RESULT" | python3 -c "
+import sys, json, base64
+first, second = json.loads(sys.stdin.read())
+token = '$TOKEN'
+payload = token.split('.')[1]
+payload += '=' * (-len(payload) % 4)
+pid = json.loads(base64.urlsafe_b64decode(payload))['sub']
+if not first or not second:
+    print('missing state: first=%s second=%s' % (bool(first), bool(second))); sys.exit(1)
+a, b = first['players'][pid], second['players'][pid]
+print('before disconnect: x=%s y=%s' % (a['x'], a['y']))
+print('after reconnect:   x=%s y=%s' % (b['x'], b['y']))
+# The player moved away from spawn, sent no input after reconnecting, and must be back where they left.
+if not b['connected'] or (a['x'], a['y']) != (b['x'], b['y']) or (b['x'], b['y']) == (0.0, 0.0):
+    print('position not restored'); sys.exit(1)
+"; then
+  echo "FAIL: Player state not restored on reconnect"
+  exit 1
 fi
-
-# 3. Verify that the second connection's player position is consistent (restored from hold slot)
-echo "First connection players: $FIRST_PLAYERS"
-echo "Second connection players: $SECOND_PLAYERS"
-
-FOUND=$(python3 -c "
-import sys,json
-second = json.loads('$SECOND_PLAYERS')
-# Check that at least one player has connected=True and expected position data
-for pid, p in second.items():
-    if p.get('connected') and p.get('x', 0) != 0:
-        print('restored')
-        sys.exit(0)
-print('no_player')
-" 2>/dev/null)
-
-if [ "$FOUND" = "restored" ]; then
-  echo "PASS: Player state restored after disconnect (hold slot working)"
-elif [ "$FOUND" = "no_player" ]; then
-  echo "INFO: No active player found on reconnect (game may have ended)"
-else
-  echo "INFO: Unexpected state - $FOUND"
-fi
+echo "PASS: Player state restored after disconnect (hold slot working)"

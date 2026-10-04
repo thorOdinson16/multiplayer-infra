@@ -236,6 +236,8 @@ async def queue_matchmaking(body: dict):
     token = body.get("token")
     if not token:
         raise HTTPException(status_code=400, detail="Missing token")
+    if not await validate_token(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     payload = {"token": token, "timestamp": asyncio.get_event_loop().time()}
     try:
         await publish_to_queue(payload)
