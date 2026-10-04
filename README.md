@@ -4,7 +4,7 @@
 
 A multiplayer arena game backend built as nine cooperating microservices. Game rooms run as replicas
 behind an **etcd leader election**: kill the leader and another replica takes over and the match keeps
-ticking, in about **5 seconds** (measured, see [benchmarks](docs/benchmarks.md)). Player state flows
+ticking, in about **5 seconds** (measured, see [engineering notes](docs/engineering-notes.md#measurements)). Player state flows
 through Kafka, Redis and PostgreSQL, and every service is traced end to end.
 
 ## What it demonstrates
@@ -12,13 +12,13 @@ through Kafka, Redis and PostgreSQL, and every service is traced end to end.
 - **Fault tolerance you can see.** Hard-kill the leader container; a follower wins the etcd lease,
   rebuilds state from Redis (or replays Kafka if Redis is gone) and resumes the match.
 - **Event-driven design with the right tool per job.** Kafka for the ordered event log, RabbitMQ for
-  work queues, Redis for hot state, PostgreSQL for durable data. See [design decisions](docs/decisions.md).
+  work queues, Redis for hot state, PostgreSQL for durable data. See [architecture and design decisions](docs/architecture.md#design-decisions).
 - **Correctness under concurrency.** Atomic, idempotent Elo updates; unique constraints instead of
   check-then-insert; at-least-once Kafka handling with offsets committed after success.
 - **Observability from day one.** OpenTelemetry traces to Jaeger, Prometheus metrics on every service,
   Grafana dashboards.
 - **Tested against the real stack.** CI starts the full compose environment and runs end-to-end,
-  failover, hold-slot and telemetry checks. [What went wrong along the way](docs/lessons.md).
+  failover, hold-slot and telemetry checks. [What went wrong along the way](docs/engineering-notes.md#lessons-learned).
 
 ## Architecture
 
@@ -110,7 +110,7 @@ docker kill $(docker ps --filter name=game-room-1 -q)    # or game-room-2-1; whi
 | Capacity of one room | about 100 players before the median tick slips to ~63 ms |
 
 Failover time is dominated by the 5-second etcd lease TTL. Method, caveats and analysis are in
-[docs/benchmarks.md](docs/benchmarks.md).
+[docs/engineering-notes.md](docs/engineering-notes.md#measurements).
 
 ## Services
 
@@ -150,7 +150,7 @@ a Helm render, and then the full-stack scripts above.
 - **One room tops out around 100 players.** Each tick sends full state to every client. Deltas, a binary
   format and interest management would raise that; more rooms scale horizontally.
 - **Failover takes about 5 seconds** because of the lease TTL (a deliberate trade-off, see
-  [decisions](docs/decisions.md#2-leader-election-with-etcd-leases)).
+  [architecture](docs/architecture.md#2-leader-election-with-etcd-leases)).
 - **Matchmaking's queue is in memory.** Requests already pulled from RabbitMQ are lost if matchmaking
   restarts.
 - **Replay seek reads the whole archive** to return a page of events.
@@ -170,5 +170,5 @@ infra/kubernetes/  Kubernetes manifests
 infra/helm/        Helm chart (includes a copy of the database schema)
 monitoring/        Prometheus, OpenTelemetry collector, Grafana provisioning
 scripts/           database schema, Kafka/RabbitMQ setup, tests, benchmarks
-docs/              design decisions, benchmarks, lessons learned, original requirements
+docs/              architecture and design decisions; benchmarks and lessons learned
 ```

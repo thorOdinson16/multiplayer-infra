@@ -25,7 +25,7 @@ class AsyncKafkaProducer:
 
     A background thread drives ``poll()`` so the asyncio loop never blocks on
     delivery callbacks, while callers can still await per-message delivery
-    acknowledgement (needed for the Kafka-first commit ordering, ADR-08).
+    acknowledgement (needed for the Kafka-first commit ordering, see docs/architecture.md).
     """
 
     def __init__(self, producer, loop):
