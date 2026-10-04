@@ -4,7 +4,7 @@ import os
 import uuid
 import redis.asyncio as redis
 from confluent_kafka import Producer
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from starlette.responses import Response
 from prometheus_client import generate_latest
 
@@ -140,7 +140,7 @@ async def metrics():
 
 
 @app.websocket("/ws")
-async def ws_endpoint(websocket):
+async def ws_endpoint(websocket: WebSocket):
     await websocket_endpoint(websocket, election, game_loop, connected_players, connected_spectators, settings.auth_service_url)
 
 

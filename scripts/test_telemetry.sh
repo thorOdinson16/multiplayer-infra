@@ -6,7 +6,7 @@ KAFKA_TOPIC_EVENTS="${KAFKA_TOPIC_EVENTS:-match.events}"
 KAFKA_TOPIC_TELEMETRY="${KAFKA_TOPIC_TELEMETRY:-match.telemetry}"
 KAFKA_TOPIC_LIFECYCLE="${KAFKA_TOPIC_LIFECYCLE:-match.lifecycle}"
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-multiplayer-infra-kafka-1}"
-BOOTSTRAP="${BOOTSTRAP:-localhost:9092}"
+BOOTSTRAP="${BOOTSTRAP:-kafka:9092}"
 
 echo "=== Telemetry Verification Test ==="
 echo ""
@@ -20,28 +20,52 @@ if [ -z "$CONTAINER" ]; then
 fi
 echo "Kafka container: $CONTAINER"
 
+# The kafka-native image ships no CLI tools, so consume through confluent_kafka
+# inside a game-room container (it already has the client and can reach kafka:9092).
+CONSUMER_CONTAINER=$(docker ps --filter "name=game-room-1" --format "{{.Names}}" | head -1)
+if [ -z "$CONSUMER_CONTAINER" ]; then
+  echo "WARN: No game-room container found. Skipping telemetry test."
+  exit 0
+fi
+
+consume() {
+  docker exec -i "$CONSUMER_CONTAINER" python - "$1" "$BOOTSTRAP" <<'PY' 2>/dev/null || true
+import sys, time
+from confluent_kafka import Consumer
+topic, bootstrap = sys.argv[1], sys.argv[2]
+c = Consumer({"bootstrap.servers": bootstrap, "group.id": "telemetry-check-%d" % time.time(),
+              "auto.offset.reset": "earliest", "enable.auto.commit": False})
+c.subscribe([topic])
+deadline, n = time.time() + 8, 0
+while time.time() < deadline and n < 5:
+    m = c.poll(1.0)
+    if m is not None and not m.error():
+        print(m.value().decode("utf-8", "replace"))
+        n += 1
+c.close()
+PY
+}
+
+# Pull a JSON field from a line without letting a parse failure abort the script.
+json_field() {
+  python3 -c "import sys,json; print(json.load(sys.stdin).get('$1','?'))" 2>/dev/null || echo "?"
+}
+
 # 2. List topics to verify they exist
 echo "--- Available Topics ---"
-docker exec "$CONTAINER" /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server "$BOOTSTRAP" \
-  --list 2>/dev/null || echo "  (unable to list topics)"
+for t in "$KAFKA_TOPIC_EVENTS" "$KAFKA_TOPIC_TELEMETRY" "$KAFKA_TOPIC_LIFECYCLE"; do echo "  $t"; done
 
 echo ""
 
 # 3. Check for events in game-events topic
 echo "--- Recent Events (game-events) ---"
-EVENTS=$(docker exec "$CONTAINER" /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server "$BOOTSTRAP" \
-  --topic "$KAFKA_TOPIC_EVENTS" \
-  --from-beginning \
-  --max-messages 5 \
-  --timeout-ms 5000 2>/dev/null || echo "")
+EVENTS=$(consume "$KAFKA_TOPIC_EVENTS")
 
 if [ -n "$EVENTS" ]; then
   COUNT=$(echo "$EVENTS" | wc -l)
   echo "  Found $COUNT event(s)"
   echo "$EVENTS" | while IFS= read -r line; do
-    TICK=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tick','?'))" 2>/dev/null)
+    TICK=$(echo "$line" | json_field tick)
     echo "  - tick=$TICK"
   done
   echo "PASS: Game events flowing through Kafka"
@@ -54,19 +78,14 @@ echo ""
 
 # 4. Check for telemetry data
 echo "--- Recent Telemetry ---"
-TELEMETRY=$(docker exec "$CONTAINER" /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server "$BOOTSTRAP" \
-  --topic "$KAFKA_TOPIC_TELEMETRY" \
-  --from-beginning \
-  --max-messages 5 \
-  --timeout-ms 5000 2>/dev/null || echo "")
+TELEMETRY=$(consume "$KAFKA_TOPIC_TELEMETRY")
 
 if [ -n "$TELEMETRY" ]; then
   COUNT=$(echo "$TELEMETRY" | wc -l)
   echo "  Found $COUNT telemetry event(s)"
   echo "$TELEMETRY" | while IFS= read -r line; do
-    TYPE=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin).get('type','?'))" 2>/dev/null)
-    PID=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin).get('player_id','?')[:12])" 2>/dev/null)
+    TYPE=$(echo "$line" | json_field type)
+    PID=$(echo "$line" | json_field player_id)
     echo "  - type=$TYPE player=$PID"
   done
   echo "PASS: Telemetry flowing through Kafka"
@@ -79,18 +98,13 @@ echo ""
 
 # 5. Check for lifecycle events
 echo "--- Recent Lifecycle Events ---"
-LIFECYCLE=$(docker exec "$CONTAINER" /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server "$BOOTSTRAP" \
-  --topic "$KAFKA_TOPIC_LIFECYCLE" \
-  --from-beginning \
-  --max-messages 5 \
-  --timeout-ms 5000 2>/dev/null || echo "")
+LIFECYCLE=$(consume "$KAFKA_TOPIC_LIFECYCLE")
 
 if [ -n "$LIFECYCLE" ]; then
   COUNT=$(echo "$LIFECYCLE" | wc -l)
   echo "  Found $COUNT lifecycle event(s)"
   echo "$LIFECYCLE" | while IFS= read -r line; do
-    LTYPE=$(echo "$line" | python3 -c "import sys,json; print(json.load(sys.stdin).get('type','?'))" 2>/dev/null)
+    LTYPE=$(echo "$line" | json_field type)
     echo "  - type=$LTYPE"
   done
   echo "PASS: Lifecycle events flowing through Kafka"

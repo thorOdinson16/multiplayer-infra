@@ -97,23 +97,37 @@ def _schedule_debounced_write(upstreams):
 
 
 def watch_etcd():
-    client = get_etcd()
-    last_upstreams = load_current_upstreams()
-    if last_upstreams:
-        _schedule_debounced_write(last_upstreams)
-    watch_prefix = "/match/"
-    while True:
-        try:
-            events = client.watch_prefix(watch_prefix, timeout=60)
-            for event in events:
-                pass
-            upstreams = load_current_upstreams()
+    last_upstreams = {}
+    lock = threading.Lock()
+
+    def resync(*_):
+        nonlocal last_upstreams
+        upstreams = load_current_upstreams()
+        with lock:
             if upstreams != last_upstreams:
                 last_upstreams = upstreams
                 _schedule_debounced_write(upstreams)
+
+    while True:
+        watch_id = None
+        client = None
+        try:
+            client = get_etcd()
+            resync()
+            watch_id = client.add_watch_prefix_callback("/match/", resync)
+            # Periodic resync covers any event dropped around a reconnect.
+            while True:
+                time.sleep(60)
+                resync()
         except Exception as e:
             logger.error(f"Watch error: {e}, reconnecting...")
-            time.sleep(2)
+        finally:
+            if client is not None and watch_id is not None:
+                try:
+                    client.cancel_watch(watch_id)
+                except Exception:
+                    pass
+        time.sleep(2)
 
 
 @app.on_event("startup")
