@@ -3,10 +3,10 @@
 Short records of the choices that shape this system: what was decided, why, and what it costs.
 The original requirements and earlier ADRs are in [REQUIREMENTS.md](REQUIREMENTS.md).
 
-## 1. PostgreSQL for durable data, Redis for sessions (replaced Couchbase)
+## 1. PostgreSQL for durable data, Redis for sessions
 
-**Context.** The first version stored everything in Couchbase. In practice the access patterns were
-ordinary: look up a player by username, update win/loss counters, rank by rating, store a match
+**Context.** The first version kept everything in a single document store. In practice the access
+patterns were ordinary: look up a player by username, update win/loss counters, rank by rating, store a match
 record, and expire sessions.
 
 **Decision.** Players, matches and replay checkpoints live in PostgreSQL. Sessions live in Redis,
@@ -14,15 +14,15 @@ which expires keys natively.
 
 **Why.**
 - A `UNIQUE` constraint on `username` removes the check-then-insert race in registration. With
-  Couchbase, five parallel sign-ups for one name all succeeded.
+  the document store, five parallel sign-ups for one name all succeeded.
 - A transaction with `SELECT ... FOR UPDATE` makes the leaderboard update atomic, so concurrent
   matches no longer lose each other's writes.
-- Postgres starts in seconds. Couchbase needed a raised file-descriptor limit and over a minute to
-  become healthy, which slowed every CI run.
-- The Couchbase SDK calls were blocking and ran inside `async` handlers, stalling the event loop.
+- Postgres starts in seconds. The document store needed a raised file-descriptor limit and over a
+  minute to become healthy, which slowed every CI run.
+- That store's SDK calls were blocking and ran inside `async` handlers, stalling the event loop.
 
 **Cost.** Redis sessions are only as durable as its append-only file. A Redis loss logs everyone out;
-it does not lose accounts. Existing Couchbase data was not migrated.
+it does not lose accounts. Data from the earlier store was not migrated.
 
 ## 2. Leader election with etcd leases
 

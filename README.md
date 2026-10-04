@@ -157,7 +157,7 @@ a Helm render, and then the full-stack scripts above.
 - **Elo is basic:** a fixed K-factor of 32 and pairwise comparison by score, with no rating uncertainty.
 - **Local credentials are hardcoded defaults.** The Helm chart uses plain values and an `emptyDir` for
   Postgres; real deployments need Secrets and a persistent volume.
-- **No TLS between services**, and no migration path from the earlier Couchbase data.
+- **No TLS between services.**
 - **MinIO runs from `bitnamilegacy/minio`**, a frozen image, because upstream stopped publishing images.
 
 ## Repository layout

@@ -44,11 +44,11 @@ The platform encompasses the full lifecycle of a multiplayer session—from play
 ### 1.3 Background and Motivation
 Modern multiplayer game backends are among the most demanding distributed systems in production. They require sub-100ms state synchronization, zero-downtime failover, dynamic scaling under unpredictable load, and long-term event archival—all simultaneously. This project reconstructs that class of system from first principles, deliberately selecting tools that represent current industry practice rather than legacy defaults.
 
-The secondary motivation is demonstrating deep familiarity with Couchbase's core capabilities—memory-first document storage, N1QL query semantics, and cross-datacenter replication—within a realistic, high-throughput data access pattern.
+The secondary motivation is demonstrating sound data handling under concurrency—transactional updates, idempotent event consumers, and constraint-enforced uniqueness—within a realistic, high-throughput data access pattern.
 
 ### 1.4 Intended Audience
 - The author, as a technical reference throughout development
-- Engineering interviewers at Couchbase and similar systems-focused organizations
+- Engineering interviewers at companies that build distributed, event-driven systems
 - Open-source contributors and reviewers evaluating the project on GitHub
 
 ---
@@ -61,7 +61,7 @@ The secondary motivation is demonstrating deep familiarity with Couchbase's core
 |----|------|
 | G-01 | Demonstrate a complete, working distributed backend system with real observable behavior |
 | G-02 | Implement authoritative game state replication and leader election using etcd leases (Raft under the hood) |
-| G-03 | Showcase Couchbase as a primary data store with N1QL queries, XDCR, and memory-first access |
+| G-03 | Use PostgreSQL for durable data with transactional, idempotent updates, and Redis with TTLs for sessions |
 | G-04 | Separate event streaming (Kafka) from task queuing (RabbitMQ) with clearly justified boundaries |
 | G-05 | Achieve autonomous pod scaling in response to matchmaking demand via Kubernetes HPA |
 | G-06 | Provide end-to-end distributed tracing across all services via OpenTelemetry |
@@ -89,7 +89,7 @@ Core Services   ←── Auth, Matchmaking, Game Rooms, Replay, Leaderboard,
        │
 Messaging Layer ←── Kafka (event log) + RabbitMQ (task queues)
        │
-Data Layer      ←── Couchbase (primary) + Redis (ephemeral) + Object Storage (archives)
+Data Layer      ←── PostgreSQL (durable) + Redis (ephemeral, sessions) + Object Storage (archives)
        │
 Infrastructure  ←── Kubernetes + etcd + Docker + GitHub Actions + ArgoCD
        │
@@ -104,10 +104,8 @@ Game room leader election is delegated to etcd leases rather than embedding a Ra
 **ADR-02: Kafka and RabbitMQ as complementary, not competing brokers**  
 Kafka is used exclusively for immutable, ordered, high-throughput event logs (movement, telemetry, replay). RabbitMQ is used exclusively for task queues requiring competing consumers and explicit acknowledgement (matchmaking, notifications, async jobs). These are fundamentally different messaging primitives and must not be conflated.
 
-**ADR-03: Couchbase as primary data store — SUPERSEDED**  
-> Superseded: the platform now uses PostgreSQL for players, matches and replay checkpoints, and Redis (with TTLs) for sessions. Reasons: unique constraints and transactions fix registration and leaderboard race conditions, startup is fast, and the Couchbase SDK blocked the event loop. Other Couchbase references in this document describe the original design.
-
-Couchbase is selected over PostgreSQL or MongoDB for its memory-first bucket architecture, native N1QL support, and XDCR capability. These features map directly to the access patterns required: hot player session data served from RAM, flexible leaderboard queries without schema migrations, and future multi-region replication.
+**ADR-03: PostgreSQL for durable data, Redis for sessions**  
+PostgreSQL stores players, match records and replay checkpoints. Unique constraints and transactions remove the check-then-insert and read-modify-write races that a document store invites: usernames are unique by constraint, and a match result is applied to every participant's rating in one transaction. Redis holds sessions because it expires keys natively. See [decisions.md](decisions.md) for the full record.
 
 **ADR-04: etcd over ZooKeeper**  
 etcd replaces ZooKeeper for service coordination and distributed configuration. ZooKeeper is a pre-Kafka-KRaft dependency with a dated operational model. etcd is what Kubernetes itself uses internally and represents current industry practice for distributed key-value coordination.
@@ -132,7 +130,7 @@ On failover, the new leader loads Redis state and the last offset, then replays 
 After winning the etcd lease, the game room leader writes its reachable pod address (stable DNS name) to the key `/match/{matchId}/leader-address`. The Reconnect Handler reads this key to direct reconnecting players to the correct leader endpoint. NGINX is dynamically reconfigured via a small sidecar that watches etcd for active match routes, ensuring WebSocket connections are proxied to the correct leader without manual reloads.
 
 **ADR-10: Cold-start replay path for game rooms**  
-In the event of a complete data‑plane loss (Redis pod crash, node restart), the game room leader can reconstruct the latest game state by replaying the entire `match.events` Kafka partition from offset zero (or from the nearest Couchbase checkpoint). This recovery path is invoked whenever Redis holds no state for an active match. Normal fast‑failover (etcd lease loss) uses the Redis snapshot + incremental Kafka replay.
+In the event of a complete data‑plane loss (Redis pod crash, node restart), the game room leader can reconstruct the latest game state by replaying the entire `match.events` Kafka partition from offset zero (or from the nearest replay checkpoint in PostgreSQL). This recovery path is invoked whenever Redis holds no state for an active match. Normal fast‑failover (etcd lease loss) uses the Redis snapshot + incremental Kafka replay.
 
 ---
 
@@ -150,7 +148,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 | Event Streaming | Apache Kafka | 3.7+ (KRaft mode) | Immutable event log: movement, telemetry, replay |
 | Task Queue | RabbitMQ | 3.13+ | Matchmaking queues, notifications, async job dispatch |
 | Coordination | etcd | 3.5+ | Distributed config, service coordination, leader discovery |
-| Primary Database | Couchbase Server | 7.6+ | Player profiles, sessions, match history, leaderboard |
+| Primary Database | PostgreSQL | 16 | Player profiles, match history, replay checkpoints, leaderboard |
 | Cache / Pub-Sub | Redis | 7.x | Ephemeral per-match state, real-time pub/sub |
 | Object Storage | MinIO (S3-compatible) | latest | Replay archive storage |
 | Observability | OpenTelemetry Collector | latest | Distributed tracing pipeline across all services |
@@ -170,7 +168,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 | Matchmaking Service | Python (aio-pika) | Async RabbitMQ consumer, easy to implement competing consumers |
 | Game Room Server | Python (FastAPI + asyncio) | Async WebSocket handling; CPU-bound tick loop offloaded via `run_in_executor` |
 | Replay Service | Python (confluent-kafka) | Kafka consumer with high-level consumer groups |
-| Leaderboard Service | Python (FastAPI) | Couchbase Python SDK v4, N1QL query execution |
+| Leaderboard Service | Python (FastAPI) | psycopg 3 with a connection pool; transactional Elo updates and indexed ranking queries |
 | Analytics Service | Python (confluent-kafka) | Kafka consumer, Prometheus metrics exposure |
 | Notification Service | Python (aio-pika) | Async RabbitMQ dispatch |
 | Reconnect Handler | Python (redis.asyncio) | Async Redis client, state delta computation |
@@ -186,7 +184,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 |----|-------------|
 | FR-AUTH-01 | The system shall authenticate players using username/password credentials and issue a signed JWT on success |
 | FR-AUTH-02 | JWTs shall have a configurable expiry (default 24 hours) and be validated on every WebSocket connection upgrade |
-| FR-AUTH-03 | Session tokens shall be stored in Couchbase with a TTL matching the JWT expiry |
+| FR-AUTH-03 | Session tokens shall be stored in Redis with a TTL matching the JWT expiry |
 | FR-AUTH-04 | Expired or invalid tokens shall result in immediate connection rejection with a descriptive error code |
 | FR-AUTH-05 | The Auth Service shall support token refresh without requiring full re-authentication |
 
@@ -215,7 +213,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 | FR-GR-06 | Player input latency from client send to state broadcast shall be under 100ms on a local network |
 | FR-GR-07 | The game room shall support a minimum of 8 simultaneous player connections |
 | FR-GR-08 | Spectator connections shall receive read-only state broadcasts without participating in input processing |
-| FR-GR-09 | On match completion, the game room leader shall publish a match-end event to the `match.lifecycle` Kafka topic, write the final outcome to Couchbase, and then release the room (release etcd lease and unregister from pool). |
+| FR-GR-09 | On match completion, the game room leader shall publish a match-end event to the `match.lifecycle` Kafka topic, write the final outcome to PostgreSQL, and then release the room (release etcd lease and unregister from pool). |
 
 ### 5.4 Fault Tolerance and Reconnection
 
@@ -245,9 +243,9 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 
 | ID | Requirement |
 |----|-------------|
-| FR-LB-01 | Match outcomes shall be written to Couchbase immediately on match completion, triggered by consumption of the `match.lifecycle` Kafka topic |
+| FR-LB-01 | Match outcomes shall be written to PostgreSQL immediately on match completion, triggered by consumption of the `match.lifecycle` Kafka topic, and applied at most once per match |
 | FR-LB-02 | The Leaderboard Service shall expose a ranked player list queryable by time window (daily, weekly, all-time) |
-| FR-LB-03 | Rankings shall be computed using N1QL queries over the player document model in Couchbase |
+| FR-LB-03 | Rankings shall be computed with indexed SQL queries over the players table |
 | FR-LB-04 | Leaderboard queries shall return results within 200ms for datasets up to 100,000 player documents |
 | FR-LB-05 | A player's personal rank, win rate, and average score shall be retrievable in a single API call |
 
@@ -282,7 +280,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 | NFR-P-01 | WebSocket connection establishment (including auth) shall complete within 200ms under normal load |
 | NFR-P-02 | Matchmaking queue processing shall handle 100 concurrent matchmaking requests without degradation |
 | NFR-P-03 | Kafka event publishing from the game room shall add no more than 5ms of latency to the tick cycle |
-| NFR-P-04 | Couchbase reads for player profile data shall complete within 5ms for documents resident in the memory-first bucket |
+| NFR-P-04 | Player profile reads by primary key shall complete within 5ms |
 | NFR-P-05 | Redis reads for per-match state shall complete within 2ms |
 | NFR-P-06 | The system shall support a minimum of 10 concurrent active matches on a single-node minikube deployment |
 
@@ -331,7 +329,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 - **Role:** Credential validation and session lifecycle management
 - **API:** REST over HTTP
 - **Endpoints:** `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/validate`
-- **Dependencies:** Couchbase (session store), NGINX (inbound)
+- **Dependencies:** PostgreSQL (players), Redis (sessions), NGINX (inbound)
 - **Token format:** JWT, RS256 (asymmetric), configurable expiry. Public key is distributed via a well‑known endpoint for inter‑service validation.
 - **Scalability:** Stateless, horizontally scalable
 
@@ -353,13 +351,13 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 - **Leader registration:** On winning the lease, writes its stable pod DNS name to `/match/{matchId}/leader-address` in etcd.
 - **Tick rate:** 20 TPS (configurable)
 - **Spectator buffering:** Server-side ring buffer on the leader; player broadcast path is unaffected (ADR-07). Buffer is **not** persisted; on failover, spectators will see a gap.
-- **Cold‑start recovery:** If no Redis state exists, the leader replays the entire Kafka `match.events` partition from offset 0 (or from the latest Couchbase checkpoint). During this replay, it does not accept player connections until caught up.
-- **Match-end event:** On match completion, publishes to `match.lifecycle`, writes final outcome to Couchbase, then releases the etcd lease and removes itself from the available pool.
+- **Cold‑start recovery:** If no Redis state exists, the leader replays the entire Kafka `match.events` partition from offset 0 (or from the latest replay checkpoint). During this replay, it does not accept player connections until caught up.
+- **Match-end event:** On match completion, publishes to `match.lifecycle`, writes final outcome to PostgreSQL, then releases the etcd lease and removes itself from the available pool.
 - **Health probes:**
   - Liveness: `GET /health` → 200 if process alive.
   - Readiness: `GET /ready` → 200 only if connections to etcd, Redis, and Kafka are healthy and (for leader) lease is held.
 - **Graceful shutdown:** On SIGTERM, the leader finishes processing the current tick, publishes any pending Kafka events, releases the etcd lease, and exits cleanly.
-- **Dependencies:** Redis (hot state + offset), Kafka (event publish to `match.events` and `match.lifecycle`), etcd (service registration and leader election), Couchbase (match record write)
+- **Dependencies:** Redis (hot state + offset), Kafka (event publish to `match.events` and `match.lifecycle`), etcd (service registration and leader election), PostgreSQL (match record write)
 
 ### 7.5 Reconnect Handler
 - **Role:** State delta computation and delivery for reconnecting players
@@ -372,17 +370,17 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 - **Consumers:**
   - Kafka topic `match.events`, consumer group `replay-service` — event ingestion
   - Kafka topic `match.lifecycle`, consumer group `replay-lifecycle` — match boundary detection and finalization trigger
-- **Storage:** Checkpoints in Couchbase, archives in MinIO
+- **Storage:** Checkpoints in PostgreSQL, archives in MinIO
 - **API:** `GET /replay/{matchId}`, `GET /replay/{matchId}/seek?tick={n}`
-- **Dependencies:** Kafka, Couchbase, MinIO
+- **Dependencies:** Kafka, PostgreSQL, MinIO
 
 ### 7.7 Leaderboard Service
 - **Role:** Match outcome recording and ranked query serving
 - **Consumer:** Kafka topic `match.lifecycle`, consumer group `leaderboard-service` — triggers outcome write on match-end event
-- **Query engine:** Couchbase N1QL
+- **Query engine:** PostgreSQL (SQL)
 - **API:** `GET /leaderboard?window=daily|weekly|all`, `GET /leaderboard/player/{id}`
-- **Indexing:** Couchbase GSI indexes on `score`, `wins`, `playerId`, `timestamp`
-- **Dependencies:** Kafka (`match.lifecycle`), Couchbase
+- **Indexing:** B-tree indexes on `elo_rating` and `last_seen`; unique index on `username`
+- **Dependencies:** Kafka (`match.lifecycle`), PostgreSQL
 
 ### 7.8 Analytics Service
 - **Role:** Telemetry aggregation and metrics exposure
@@ -400,26 +398,22 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 
 ## 8. Data Requirements
 
-### 8.1 Couchbase Document Model
+### 8.1 Data Model
 
-**Player document** (`players` bucket)
-```json
-{
-  "type": "player",
-  "playerId": "uuid",
-  "username": "string",
-  "passwordHash": "string",
-  "eloRating": 1200,
-  "wins": 0,
-  "losses": 0,
-  "totalMatches": 0,
-  "averageScore": 0.0,
-  "createdAt": "ISO8601",
-  "lastSeen": "ISO8601"
-}
-```
+The authoritative schema is `scripts/postgres_init.sql` (idempotent; applied on first start).
 
-**Session document** (`sessions` bucket, memory-first, TTL 24h)
+**`players`**: `player_id` (PK), `username` (UNIQUE), `password_hash`, `elo_rating` (default 1200,
+indexed), `wins`, `losses`, `total_matches`, `average_score`, `created_at`, `last_seen` (indexed).
+
+**`matches`**: PK `(match_id, started_at)` because room ids are reused across matches; `ended_at`,
+`duration_seconds`, `players` (JSONB), `outcome` (JSONB: winner and per-player scores).
+
+**`processed_matches`**: PK `(match_id, started_at)`. A row is inserted in the same transaction that
+applies a match to player ratings, so a redelivered `match.end` event is a no-op.
+
+**`replay_checkpoints`**: PK `(match_id, tick)`; `events` (JSONB), `snapshot` (JSONB), `created_at`.
+
+**Session records (Redis, TTL = JWT lifetime, 24h)**
 ```json
 {
   "type": "session",
@@ -430,32 +424,8 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
   "ipAddress": "string"
 }
 ```
-
-**Match document** (`matches` bucket)
-```json
-{
-  "type": "match",
-  "matchId": "uuid",
-  "players": ["playerId"],
-  "startedAt": "ISO8601",
-  "endedAt": "ISO8601",
-  "durationSeconds": 0,
-  "outcome": { "winner": "playerId", "scores": {} },
-  "replayArchiveUrl": "string"
-}
-```
-
-**Replay checkpoint document** (`replays` bucket)
-```json
-{
-  "type": "replay_checkpoint",
-  "matchId": "uuid",
-  "tick": 300,
-  "snapshotState": {},
-  "kafkaOffset": 0,
-  "createdAt": "ISO8601"
-}
-```
+A second key, `player_session:{playerId}`, points at the player's current session so a token can be
+revoked on logout or replaced on re-login.
 
 ### 8.2 Kafka Topics
 
@@ -493,7 +463,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 - Minimum cluster: 1 node (minikube), 8 CPU cores, 16GB RAM for local development
 - Namespaces: `game-platform`, `monitoring`, `infra`
 - Resource limits defined on all pods; no unbounded containers
-- StatefulSets used for: Game Room replicas, Couchbase, Kafka, etcd (3‑node cluster)
+- StatefulSets used for: Game Room replicas, PostgreSQL, Kafka, etcd (3‑node cluster)
 - Deployments used for: all stateless services
 - HPA configured on Game Room Deployment with CPU-based scaling (see NFR-S-02, NFR-S-05)
 - etcd cluster: 3 nodes with anti‑affinity (simulated via `podAntiAffinity` on hostname) to ensure resilience even in local demonstration.
@@ -509,7 +479,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 
 | Component | Storage Type | Size |
 |-----------|-------------|------|
-| Couchbase data bucket | PersistentVolume | 20GB |
+| PostgreSQL data volume | PersistentVolume | 20GB |
 | Kafka log storage | PersistentVolume | 30GB |
 | etcd | PersistentVolume | 2GB (each) |
 | MinIO | PersistentVolume | 50GB |
@@ -525,7 +495,7 @@ In the event of a complete data‑plane loss (Redis pod crash, node restart), th
 | SEC-02 | JWT signing keys (private key) shall be stored as Kubernetes Secrets; public key shall be accessible via a well‑known HTTP endpoint |
 | SEC-03 | No service shall run as root inside its container |
 | SEC-04 | Docker images shall use minimal base images (distroless or alpine) to reduce attack surface |
-| SEC-05 | Couchbase credentials shall be injected via Kubernetes Secrets |
+| SEC-05 | Database credentials shall be injected via Kubernetes Secrets |
 | SEC-06 | RabbitMQ and Kafka shall require authentication for all producer and consumer connections |
 | SEC-07 | NGINX shall enforce a rate limit of 100 requests per second per IP before forwarding to upstream services |
 | SEC-08 | Inter-service API calls shall use either JWT validation (for user‑facing actions) or mutual TLS (mTLS) / API keys for system‑to‑system communication in production; for v1, service accounts with shared secrets may be used. |
@@ -549,7 +519,7 @@ The following metrics shall be exposed by each service:
 | Matchmaking | Queue depth, average wait time, lobbies assembled per minute, `matchmaking_broker_unavailable` (bool gauge), `matchmaking_expired_count` |
 | Game Room | Active matches, tick processing latency, etcd election count |
 | Kafka | Consumer lag per topic and consumer group, publish rate, partition offset |
-| Couchbase | Read/write latency, memory utilization, N1QL query duration |
+| PostgreSQL | Connection pool usage, query duration, transaction rate |
 | Redis | Hit rate, memory usage, connected clients |
 
 ### 11.3 Alerting
@@ -564,7 +534,7 @@ A Grafana dashboard shall provide a real-time view of:
 - Active match count and player count
 - Matchmaking funnel (queued → matched → expired → in-game)
 - Full distributed trace for a selected match (linked to Jaeger)
-- Couchbase bucket memory utilization
+- PostgreSQL connection pool utilization
 - Kafka topic lag per consumer group
 
 ---
@@ -611,7 +581,7 @@ On every push to `main` and every pull request:
 - Player skill ratings are initialized at 1200 (standard Elo baseline)
 - A match consists of a single game room with 2–8 players and a fixed duration of 5 minutes
 - Object storage (MinIO) is deployed within the same cluster as all other services
-- The Couchbase cluster runs as a single-node instance in development
+- PostgreSQL runs as a single instance in development
 
 ---
 
@@ -625,12 +595,12 @@ The project is considered complete when all of the following are demonstrable:
 | AC-02 | Killing the game room leader pod mid-match results in automatic failover and match resumption within 5 seconds |
 | AC-03 | A disconnected player can reconnect within 30 seconds and re-enter the match without match loss, receiving the current leader’s address from the Reconnect Handler |
 | AC-04 | A completed match replay is seekable and accurately reconstructs the match from any tick |
-| AC-05 | The leaderboard returns correct rankings via N1QL query within 200ms |
+| AC-05 | The leaderboard returns correct rankings from an indexed SQL query within 200ms |
 | AC-06 | A distributed trace for a single player input is visible end-to-end in Jaeger |
 | AC-07 | Matchmaking demand triggers automatic game room pod scale-up via Kubernetes HPA |
 | AC-08 | The full CI pipeline (test → build → push) completes successfully on a clean commit |
 | AC-09 | ArgoCD syncs a manifest change to the cluster without manual intervention |
-| AC-10 | The Grafana dashboard shows live match count, Kafka lag, and Couchbase memory utilization simultaneously |
+| AC-10 | The Grafana dashboard shows live match count, Kafka lag, and service request latency simultaneously |
 | AC-11 | Making the RabbitMQ broker unavailable causes the Matchmaking Service to return `503` and surface the `matchmaking_broker_unavailable` metric within 30 seconds |
 | AC-12 | A spectator joining with a 10-second delay observes state that is consistently 10 seconds behind the live player broadcast |
 | AC-13 | After a Redis pod crash mid‑match, the game room leader recovers by replaying the Kafka log and continues without manual intervention (cold‑start recovery). |
@@ -643,8 +613,6 @@ The project is considered complete when all of the following are demonstrable:
 |------|------------|
 | **Raft** | A consensus algorithm that ensures distributed log replication with a defined leader election process |
 | **KRaft** | Kafka's native consensus mode, replacing ZooKeeper as the metadata coordination layer |
-| **N1QL** | Couchbase's SQL-compatible query language for JSON documents |
-| **XDCR** | Cross-Datacenter Replication—Couchbase's mechanism for asynchronously replicating bucket data across geographically separated clusters |
 | **HPA** | Horizontal Pod Autoscaler—Kubernetes controller that adjusts replica count based on observed metrics |
 | **StatefulSet** | Kubernetes workload type that provides stable network identity and persistent storage across pod restarts |
 | **GitOps** | An operational model where Kubernetes cluster state is declared in a Git repository and automatically reconciled by a CD tool (ArgoCD) |
@@ -654,7 +622,6 @@ The project is considered complete when all of the following are demonstrable:
 | **Consumer Group** | A named group of Kafka consumers that collectively read a topic, with each partition assigned to exactly one member at a time |
 | **State Delta** | A compressed representation of the difference between a player's last known game state and the current game state, used for efficient reconnection |
 | **Tick** | A single simulation step in the game loop, executed at a fixed rate (20 per second) |
-| **GSI** | Global Secondary Index—a Couchbase index type that supports N1QL queries across a bucket |
 | **Dead-letter Queue** | A RabbitMQ queue that receives messages which could not be processed or expired before consumption—used here for expired matchmaking requests |
 | **Ring Buffer** | A fixed-size circular data structure used to implement the spectator broadcast delay; old entries are overwritten as new ticks are committed |
 | **Cold‑start replay** | The process of rebuilding game state from the Kafka event log when no Redis snapshot exists (full data‑plane loss) |
@@ -665,7 +632,7 @@ The project is considered complete when all of the following are demonstrable:
 
 | ID | Question | Status |
 |----|----------|--------|
-| OQ-01 | Should player documents be denormalized with summary stats or queried dynamically? | Resolved: N1QL provides dynamic ranking; summary stats are derived at query time. |
+| OQ-01 | Should player documents be denormalized with summary stats or queried dynamically? | Resolved: counters and rating are stored on the player row and updated transactionally; rankings are an indexed query. |
 | OQ-02 | What is the optimal matchmaking queue batching strategy? | Pending benchmark during implementation. |
 | OQ-03 | Should spectator replay delay be adjustable mid-game? | Out of scope for v1; fixed at join time. |
 | OQ-04 | When to replace CPU-based HPA with custom queue-depth metric? | Planned for v2; documented in ADR-06 and NFR-S-05. |

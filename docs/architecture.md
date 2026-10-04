@@ -48,7 +48,7 @@ Two brokers with distinct responsibilities, intentionally never conflated.
 
 **PostgreSQL** is the primary data store: player profiles (with a unique username constraint), match history, and replay checkpoints (JSONB). Indexes on Elo and last-seen back the leaderboard queries. Authentication sessions are not stored here; they live in Redis, which provides native TTL expiry.
 
-**Redis** holds ephemeral per-match state — the current positions, health values, and score state for active games. This is not a replacement for Couchbase; it is a complement. Match state is transient and must be low-latency. Redis pub/sub also handles real-time state broadcast within a match before events are flushed to Kafka.
+**Redis** holds ephemeral per-match state — the current positions, health values, and score state for active games. This is not a replacement for PostgreSQL; it is a complement. Match state is transient and must be low-latency. Redis pub/sub also handles real-time state broadcast within a match before events are flushed to Kafka.
 
 **Object Storage** holds completed replay archives. Once a match ends, the replay log is serialized and written to an S3-compatible store. This enforces correct data tiering — Kafka is not a long-term archive.
 
@@ -72,7 +72,7 @@ Two brokers with distinct responsibilities, intentionally never conflated.
 
 ### 1. Player connects
 
-A player opens the client and connects over WebSocket to the NGINX gateway. NGINX upgrades the connection and forwards it to the Auth Service. The Auth Service validates credentials, issues a signed JWT, and returns a session token stored in Couchbase with a TTL. The player is now authenticated and waiting in the matchmaking pool.
+A player opens the client and connects over WebSocket to the NGINX gateway. NGINX upgrades the connection and forwards it to the Auth Service. The Auth Service validates credentials, issues a signed JWT, and returns a session token stored in Redis with a TTL. The player is now authenticated and waiting in the matchmaking pool.
 
 ### 2. Matchmaking
 
@@ -80,7 +80,7 @@ The player's connection metadata — skill rating, region, preferred game mode �
 
 ### 3. Game room initializes
 
-The assigned game room brings up its three replicas. They all connect to etcd and race to acquire a lease on a key like `/match/{matchId}/leader`. The one that succeeds is the leader and begins renewing the lease. The other two become followers and watch the key. The leader initialises the match state, writes the match document to Couchbase, and notifies all matched players of their room assignment via the Notification Service (RabbitMQ job → NGINX → client push). Players' WebSocket connections are re-routed by NGINX to the game room leader's endpoint.
+The assigned game room brings up its three replicas. They all connect to etcd and race to acquire a lease on a key like `/match/{matchId}/leader`. The one that succeeds is the leader and begins renewing the lease. The other two become followers and watch the key. The leader initialises the match state and notifies all matched players of their room assignment via the Notification Service (RabbitMQ job → NGINX → client push). Players' WebSocket connections are re-routed by NGINX to the game room leader's endpoint.
 
 ### 4. Match runs
 
@@ -100,4 +100,4 @@ A player requests a replay from the client. The request hits NGINX, routes to th
 
 ### 8. Observability end-to-end
 
-Every step above emits OpenTelemetry spans. A single move input produces a trace: NGINX receive → game room process → Kafka publish → replay consume. Trace IDs propagate through message headers across Kafka and RabbitMQ so the full causal chain is visible in one view. Prometheus scrapes metrics from every service. Grafana dashboards show active matches, matchmaking queue depth, etcd election counts, Kafka consumer lag, Couchbase read latency, and Redis hit rates — all the signals that matter for a live distributed system.
+Every step above emits OpenTelemetry spans. A single move input produces a trace: NGINX receive → game room process → Kafka publish → replay consume. Trace IDs propagate through message headers across Kafka and RabbitMQ so the full causal chain is visible in one view. Prometheus scrapes metrics from every service. Grafana dashboards show active matches, matchmaking queue depth, etcd election counts, Kafka consumer lag, PostgreSQL query latency, and Redis hit rates — all the signals that matter for a live distributed system.
